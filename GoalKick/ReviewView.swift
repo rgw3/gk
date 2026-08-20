@@ -4,37 +4,16 @@
 //
 //  The coach-facing review screen: pause, slow playback, frame stepping.
 //
+//  Clips come from the app's own library, never from Photos. A 240 fps clip
+//  exported back out of Photos arrives retimed to 30 fps — every frame
+//  present, but timestamps 8× too far apart.
+//
 
 import SwiftUI
 import Combine
 import AVFoundation
 import CoreMedia
 import UIKit
-import PhotosUI
-import CoreTransferable
-import UniformTypeIdentifiers
-
-// MARK: - Photos transfer
-
-/// PhotosPicker hands back an opaque item; this copies the picked movie
-/// into our own temporary file so AVPlayer has a stable URL to work with.
-struct PickedMovie: Transferable {
-    let url: URL
-
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(contentType: .movie) { movie in
-            SentTransferredFile(movie.url)
-        } importing: { received in
-            let ext = received.file.pathExtension.isEmpty ? "mov" : received.file.pathExtension
-            let destination = FileManager.default.temporaryDirectory
-                .appendingPathComponent("review-\(UUID().uuidString)")
-                .appendingPathExtension(ext)
-            try? FileManager.default.removeItem(at: destination)
-            try FileManager.default.copyItem(at: received.file, to: destination)
-            return PickedMovie(url: destination)
-        }
-    }
-}
 
 // MARK: - Playback controller
 
@@ -48,6 +27,9 @@ final class ReviewPlayer: ObservableObject {
     @Published private(set) var frameRate: Double = 0
     @Published var speed: Double = 1.0
     @Published var status: String = "No clip loaded"
+    /// While the user drags the scrubber, the time observer must not fight
+    /// the slider for control of currentTime.
+    @Published private(set) var isScrubbing = false
 
     private var timeObserver: Any?
 
@@ -92,11 +74,24 @@ final class ReviewPlayer: ObservableObject {
     }
 
     private func observeTime(on player: AVPlayer) {
-        // 600 is the conventional timescale for video: it divides evenly by
-        // 24, 25, 30, 60, and 120, so common frame rates land on whole values.
-        let interval = CMTime(value: 1, timescale: 600)
+        // This is the interval BETWEEN callbacks, not a timestamp precision.
+        // Every callback publishes a change and re-renders the view, and the
+        // main thread also drives decoding — so asking for a fine interval
+        // here starves playback rather than making the readout better.
+        // 1/30 s is far more than the readout needs; exact frame positions
+        // come from step(_:) setting currentTime directly.
+        let interval = CMTime(value: 1, timescale: 30)
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            self?.currentTime = time.seconds
+            // The observer was registered with queue: .main, so this closure
+            // genuinely runs on the main actor — the compiler just cannot see
+            // the connection between that argument and this isolation.
+            MainActor.assumeIsolated {
+                guard let self, !self.isScrubbing else { return }
+                let seconds = time.seconds
+                if abs(seconds - self.currentTime) > 0.001 {
+                    self.currentTime = seconds
+                }
+            }
         }
     }
 
@@ -132,6 +127,78 @@ final class ReviewPlayer: ObservableObject {
         speed = newSpeed
         guard let player, isPlaying else { return }
         player.rate = Float(newSpeed)
+    }
+
+    // MARK: Scrubbing
+
+    private var isSeekInFlight = false
+    private var pendingSeekTime: Double?
+
+    func beginScrub() {
+        player?.pause()
+        isPlaying = false
+        isScrubbing = true
+    }
+
+    /// A drag emits values far faster than AVPlayer can service seeks, so
+    /// only one is ever in flight and only the newest target is kept.
+    /// Positions the finger passed through in between are dropped — nobody
+    /// needs to see them, and queueing them is what makes a scrubber lag.
+    func scrub(to seconds: Double) {
+        currentTime = seconds
+        pendingSeekTime = seconds
+        guard !isSeekInFlight else { return }
+        issuePendingSeek()
+    }
+
+    private func issuePendingSeek() {
+        guard let player, let target = pendingSeekTime else {
+            isSeekInFlight = false
+            return
+        }
+        pendingSeekTime = nil
+        isSeekInFlight = true
+
+        // Infinite tolerance means "any nearby keyframe will do" — the
+        // cheapest possible seek, which is what keeps up with a finger.
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
+                    toleranceBefore: .positiveInfinity,
+                    toleranceAfter: .positiveInfinity) { [weak self] _ in
+            Task { @MainActor in
+                self?.seekCompleted()
+            }
+        }
+    }
+
+    private func seekCompleted() {
+        if pendingSeekTime != nil {
+            issuePendingSeek()
+        } else {
+            isSeekInFlight = false
+        }
+    }
+
+    /// Exact seek once the drag ends, so the playhead settles on a real
+    /// frame rather than wherever the nearest keyframe happened to be.
+    func endScrub() {
+        guard let player else { return }
+        pendingSeekTime = nil
+        isSeekInFlight = false
+        player.seek(to: CMTime(seconds: currentTime, preferredTimescale: 600),
+                    toleranceBefore: .zero,
+                    toleranceAfter: .zero)
+        isScrubbing = false
+    }
+
+    /// Returns to the first frame and stays paused.
+    func restart() {
+        guard let player else { return }
+        player.pause()
+        isPlaying = false
+        // Zero tolerance forces an exact seek rather than the nearest
+        // keyframe, so this lands on frame 0 and not merely near it.
+        player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+        currentTime = 0
     }
 
     /// Steps exactly one frame. Stepping requires a paused player.
@@ -178,114 +245,245 @@ struct PlayerSurface: UIViewRepresentable {
     }
 }
 
+// MARK: - Clip browser
+
+struct ClipListView: View {
+    let onSelect: (Clip) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var clips: [Clip] = []
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if clips.isEmpty {
+                    ContentUnavailableView("No clips yet",
+                                           systemImage: "video.slash",
+                                           description: Text("Record a goal kick on the Record tab."))
+                } else {
+                    List {
+                        ForEach(clips) { clip in
+                            Button {
+                                onSelect(clip)
+                                dismiss()
+                            } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(clip.name)
+                                        .font(.system(.subheadline, design: .monospaced))
+                                    Text("\(clip.created.formatted(date: .abbreviated, time: .standard))  ·  \(clip.sizeDescription)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .onDelete { offsets in
+                            for index in offsets {
+                                ClipStore.delete(clips[index])
+                            }
+                            clips = ClipStore.clips()
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Clips")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+                if !clips.isEmpty {
+                    ToolbarItem(placement: .primaryAction) {
+                        EditButton()
+                    }
+                }
+            }
+        }
+        .onAppear {
+            clips = ClipStore.clips()
+        }
+    }
+}
+
 // MARK: - Screen
 
 struct ReviewView: View {
 
     @StateObject private var review = ReviewPlayer()
-    @State private var pickedItem: PhotosPickerItem?
+    @State private var showingClips = false
+    @State private var controlsVisible = true
+    @State private var hideTask: Task<Void, Never>?
 
     private let speeds: [Double] = [1.0, 0.5, 0.25]
 
     var body: some View {
-        VStack(spacing: 0) {
-            videoArea
-
-            controls
-                .padding()
-                .background(.black)
-        }
-        .background(.black)
-        .onChange(of: pickedItem) { _, newItem in
-            guard let newItem else { return }
-            Task {
-                if let movie = try? await newItem.loadTransferable(type: PickedMovie.self) {
-                    await review.load(url: movie.url)
-                } else {
-                    review.status = "Could not read that item from Photos."
-                }
-            }
-        }
-    }
-
-    private var videoArea: some View {
         ZStack {
             Color.black
+                .ignoresSafeArea()
+
             if let player = review.player {
                 PlayerSurface(player: player)
+                    .ignoresSafeArea()
             } else {
-                VStack(spacing: 12) {
-                    Image(systemName: "video.badge.plus")
-                        .font(.system(size: 44))
-                        .foregroundStyle(.white.opacity(0.5))
-                    Text("Choose a clip to review")
-                        .foregroundStyle(.white.opacity(0.6))
+                emptyState
+            }
+
+            VStack {
+                Spacer()
+                if controlsVisible {
+                    controlPanel
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // contentShape makes the whole area tappable, including the black
+        // bars beside a portrait video.
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if controlsVisible {
+                hideTask?.cancel()
+                withAnimation(.easeInOut(duration: 0.2)) { controlsVisible = false }
+            } else {
+                revealControls()
+            }
+        }
+        .sheet(isPresented: $showingClips) {
+            ClipListView { clip in
+                Task {
+                    await review.load(url: clip.url)
+                    revealControls()
+                }
+            }
+        }
+        .onDisappear {
+            hideTask?.cancel()
+        }
     }
 
-    private var controls: some View {
-        VStack(spacing: 14) {
-            Text(review.status)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.8))
+    // MARK: Auto-hide
 
+    /// Shows the controls and restarts the idle countdown. Called on every
+    /// interaction so the panel never vanishes mid-adjustment.
+    private func revealControls() {
+        withAnimation(.easeInOut(duration: 0.2)) { controlsVisible = true }
+        hideTask?.cancel()
+        // Keep the panel up when there is no clip, or the Choose clip
+        // button would disappear with no obvious way back.
+        guard review.player != nil else { return }
+        hideTask = Task {
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.3)) { controlsVisible = false }
+        }
+    }
+
+    // MARK: Pieces
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "video.badge.plus")
+                .font(.system(size: 44))
+                .foregroundStyle(.white.opacity(0.5))
+            Text("Choose a clip to review")
+                .foregroundStyle(.white.opacity(0.6))
+        }
+    }
+
+    private var controlPanel: some View {
+        VStack(spacing: 10) {
             if review.player != nil {
-                Text("frame \(review.frameIndex) of \(review.totalFrames)   ·   \(review.currentTime, specifier: "%.3f") s")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.green)
-
+                readouts
+                scrubBar
                 transportRow
                 speedRow
+            } else {
+                Text(review.status)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.8))
             }
 
-            PhotosPicker(selection: $pickedItem, matching: .videos) {
+            Button {
+                revealControls()
+                showingClips = true
+            } label: {
                 Label(review.player == nil ? "Choose clip" : "Choose another clip",
-                      systemImage: "photo.on.rectangle")
+                      systemImage: "list.bullet.rectangle")
+                    .font(.subheadline)
             }
             .buttonStyle(.bordered)
             .tint(.white)
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .environment(\.colorScheme, .dark)
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
+    }
+
+    private var readouts: some View {
+        VStack(spacing: 2) {
+            Text("frame \(review.frameIndex) of \(review.totalFrames)  ·  \(review.currentTime, specifier: "%.3f") s")
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.green)
+            Text(review.status)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.65))
+        }
+    }
+
+    private var scrubBar: some View {
+        Slider(
+            value: Binding(
+                get: { min(review.currentTime, review.duration) },
+                set: { review.scrub(to: $0) }
+            ),
+            // A zero-width range is invalid, so the duration is floored.
+            in: 0...max(review.duration, 0.001),
+            onEditingChanged: { editing in
+                if editing {
+                    review.beginScrub()
+                } else {
+                    review.endScrub()
+                }
+                revealControls()
+            }
+        )
+        .tint(.white)
     }
 
     private var transportRow: some View {
-        HStack(spacing: 28) {
-            Button {
-                review.step(-1)
-            } label: {
-                Image(systemName: "backward.frame.fill")
-                    .font(.system(size: 28))
-            }
-
-            Button {
-                review.togglePlay()
-            } label: {
-                Image(systemName: review.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 46))
-            }
-
-            Button {
-                review.step(1)
-            } label: {
-                Image(systemName: "forward.frame.fill")
-                    .font(.system(size: 28))
-            }
+        HStack(spacing: 24) {
+            transportButton("backward.end.fill", size: 24) { review.restart() }
+            transportButton("backward.frame.fill", size: 26) { review.step(-1) }
+            transportButton(review.isPlaying ? "pause.circle.fill" : "play.circle.fill",
+                            size: 42) { review.togglePlay() }
+            transportButton("forward.frame.fill", size: 26) { review.step(1) }
         }
         .foregroundStyle(.white)
     }
 
+    private func transportButton(_ symbol: String,
+                                 size: CGFloat,
+                                 action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            revealControls()
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: size))
+        }
+    }
+
     private var speedRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             ForEach(speeds, id: \.self) { speed in
                 Button {
                     review.setSpeed(speed)
+                    revealControls()
                 } label: {
                     Text(label(for: speed))
-                        .font(.system(.subheadline, design: .monospaced))
+                        .font(.system(.footnote, design: .monospaced))
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
+                        .padding(.vertical, 6)
                         .background(review.speed == speed ? .white : .white.opacity(0.15),
                                     in: RoundedRectangle(cornerRadius: 8))
                         .foregroundStyle(review.speed == speed ? .black : .white)

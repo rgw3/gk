@@ -13,7 +13,7 @@ struct RecordView: View {
 
     var body: some View {
         ZStack {
-            CameraPreview(session: recorder.session)
+            CameraPreview(recorder: recorder)
                 .ignoresSafeArea()
 
             VStack {
