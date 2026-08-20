@@ -2,7 +2,9 @@
 
 An iOS app that measures goalkeeper kicking performance from video captured on the device.
 
-Point the camera at a goal kick, record at high frame rate, and get ball **velocity**, **launch angle**, and **theoretical carry distance / max height** — using nothing but the known physical size of the ball for scale.
+The intent: point the camera at a goal kick, record at high frame rate, and get ball **velocity**, **launch angle**, and **theoretical carry distance / max height** — using nothing but the known physical size of the ball for scale.
+
+That is the goal, not the current state. See Status.
 
 ## Status
 
@@ -16,12 +18,17 @@ Early development. **Everything around the measurement works. The measurement it
 | Video review and frame stepping | Working, verified on device |
 | Ball tracking | Not started |
 | Metrics | Not started |
+| Ball size input | Does not exist — see below |
+| Flight model for carry distance | Undecided — see below |
+
+**Two of Deliverable 1's inputs are still missing, not merely unimplemented.** The app has no way to be told the ball's size, which scale calibration requires. And no decision has been made on whether carry distance and max height come from a drag-free parabola or a model with air resistance — for a ball leaving the foot at ~30 m/s those differ by roughly a factor of two, so it is not a detail.
 
 `project_notes.md` in this repository is the single source of truth for decisions, current state, and open questions. Read it before changing anything.
 
 ## Requirements
 
 - Xcode 26 with the iOS 26 SDK
+- **iOS 26.5 or later on the device.** The deployment target is 26.5; earlier iOS 26 releases will not run the build.
 - **A physical iPhone.** The Simulator has no camera, exposes no real capture formats, and cannot validate any capture work. Playback work can be validated in the Simulator.
 - Optionally an iPad, for review on a larger screen. The app is universal and needs no separate build configuration.
 - An Apple ID for code signing. A free Personal Team is sufficient; builds signed that way stop launching after 7 days and must be re-run from Xcode.
@@ -43,7 +50,7 @@ Early development. **Everything around the measurement works. The measurement it
 
 **Scale calibration.** Real-world distance is recovered from the ball's apparent pixel diameter, which requires the camera's focal length in pixels. Two routes exist:
 
-- The per-frame **intrinsic matrix**, which gives true focal length under current focus. Measured across all 70 formats on the test device: 66 support it, and the 4 that do not are exactly the four 240 fps formats. Intrinsics and 240 fps are mutually exclusive.
+- The per-frame **intrinsic matrix**, which gives true focal length under current focus. Measured across all 70 formats on the iPhone's back camera: 66 support it, and the 4 that do not are exactly the four 240 fps formats. Intrinsics and 240 fps are mutually exclusive.
 - **Field of view**, published for every format including the 240 fps ones, giving `fx = (imageWidth / 2) / tan(fieldOfView / 2)`. Nominal rather than measured, but a goal kick is filmed at 20–40 m where the lens sits at effectively infinite focus.
 
 Field of view is the route actually in use, since the intrinsic matrix is delivered only to a live capture session and is not stored in a recorded movie file.
