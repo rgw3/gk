@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Xcode — per-user state, not project state
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# Build products
+DerivedData/
+build/
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.hmap
+*.moved-aside
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Playgrounds
+timeline.xctimeline
+playground.xcworkspace
