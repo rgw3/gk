@@ -81,16 +81,16 @@ For Deliverable 1, success is being able to review the video and get metrics.
 
 ## Tech Stack
 
-The app is built as a **native iOS app in Swift**. This is decided. The requirements in Deliverable 1 depend on platform capabilities that only native access provides: high-frame-rate capture (120–240 fps), the camera intrinsic matrix, frame-accurate playback stepping, per-frame presentation timestamps, and writing to Photos. A web or cross-platform stack cannot meet them.
+The app is built as a **native iOS app in Swift**. This is decided. The requirements in Deliverable 1 depend on platform capabilities that only native access provides: high-frame-rate capture (120–240 fps), camera optics data for scale calibration, frame-accurate playback stepping, and per-frame presentation timestamps. A web or cross-platform stack cannot meet them.
 
 | Layer | Choice |
 |---|---|
-| Language | Swift 5 language mode (`SWIFT_VERSION = 5.0`), with `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` — the Xcode 26 default. Deliberately **not** Swift 6 strict concurrency: it turns data-race issues into hard compile errors, which is a poor place to learn the language. Revisit once capture works. |
+| Language | Swift 5 language mode (`SWIFT_VERSION = 5.0`), with `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` — the Xcode 26 default. Deliberately **not** Swift 6 strict concurrency. See the note below. |
 | UI | SwiftUI, with `UIViewRepresentable` wrappers for camera preview and `AVPlayerLayer` |
 | Capture | AVFoundation — `AVCaptureSession`, high-speed format selection, video stabilization forced off (it warps geometry and would corrupt measurement) |
 | Ball tracking | Vision (`VNTrackObjectRequest`) first; a Core ML detector if Vision's tracker proves insufficient |
 | Numerics | Accelerate / vImage; Metal only if profiling demands it |
-| Playback | `AVPlayer` with `rate` 0.5/0.25 and `step(byCount:)` |
+| Playback | `AVPlayer`, driven by setting `rate` directly for slow and reverse playback, and `AVPlayerItem.step(byCount:)` for frame stepping |
 | Camera attitude | CoreMotion, to correct launch angle for camera tilt |
 | Storage | The app's own `Documents/Clips/`, managed by `ClipStore`. The only copy, and the only source with true timing. Nothing is written to Photos. |
 | Dependencies | None third-party |
@@ -102,44 +102,48 @@ The app is built as a **native iOS app in Swift**. This is decided. The requirem
 
 **Known technical risk:** motion blur on a fast-moving ball at high frame rates may defeat Vision's built-in tracker and force a trained Core ML detector. The stack above supports either path.
 
+**On Swift 6:** the decision to stay in Swift 5 mode stands, and was reconsidered deliberately after capture was working rather than allowed to lapse. Strict concurrency turns data-race issues into hard compile errors, and the next phase — passing `CMSampleBuffer` and `CVPixelBuffer` to Vision — is the worst area for that friction, since neither type is `Sendable` and the annotations are Apple's to fix, not ours. `SWIFT_VERSION` is a single build setting, so migrating later costs the same work on a more settled design. Revisit once tracking works.
+
 ## Current State
 
-**Development environment is set up and verified.** The full chain — build, sign, install, launch on the physical device — has been confirmed working end to end.
+### What does NOT exist yet
 
-- **Mac:** macOS 26, Xcode 26 installed from the Mac App Store, iOS 26 platform installed, command line tools pointed at Xcode.
+**There is no measurement code of any kind.** No ball detection, no tracking, no velocity, no launch angle, no carry distance, no max height. Deliverable 1's actual metrics are entirely unstarted, and their feasibility has not been demonstrated.
+
+What exists is everything *around* the measurement: a way to capture footage good enough to measure from, and a way to look at it frame by frame. Both are verified on hardware. Neither computes anything.
+
+### Environment
+
+- **Mac:** macOS 26, Xcode 26 from the Mac App Store, iOS 26 platform installed, command line tools pointed at Xcode.
 - **Test device:** "Rocket's iPhone," paired over cable, Developer Mode enabled, developer certificate trusted.
 - **Signing:** free Apple ID under a Personal Team (Robert Williams), automatic signing. Not enrolled in the paid Apple Developer Program.
 
-**The GoalKick Xcode project has been created and signs cleanly.**
+Build, sign, install, and launch on the physical device are all confirmed working. Getting code onto the phone is a solved problem.
+
+### Project
 
 - **Location:** `/Users/rocket/Github/gk/GoalKick/`
 - **Bundle identifier:** `com.rocket.GoalKick`
 - **Targets:** `GoalKick`, `GoalKickTests`, `GoalKickUITests`
-- **Created with:** SwiftUI interface, Swift language, Storage None, CloudKit off
-- **Version control:** Git repository initialized by Xcode at the project root. `project_notes.md` was moved inside the project folder, so the source of truth is versioned alongside the code.
-- **Signing & Capabilities:** Team set to Robert Williams (Personal Team), automatic signing, Xcode Managed Profile and an Apple Development certificate both resolving. No errors.
+- **Configured as:** SwiftUI interface, Storage None, CloudKit off
+- **Version control:** Git at the project root, pushed to `https://github.com/rgw3/gk` (private, remote `origin`, branch `main`). `.gitignore` covers Xcode noise; `xcuserdata` is untracked.
+- **`project_notes.md` lives inside the project folder**, so the source of truth is versioned alongside the code.
+- **`README.md`** exists at the project root as a public-facing overview. It restates parts of this file for a reader arriving from GitHub; **this file is authoritative** where the two differ.
 
-**The project has been built, signed, installed, and launched on Rocket's iPhone** under `com.rocket.GoalKick`, with no errors. Getting code onto the device is a solved problem.
-
-**Camera capability confirmed on the test device.** The back camera exposes 70 formats. Those relevant to measurement:
-
-| Resolution | Max fps |
+| File | Contents |
 |---|---|
-| 1920 × 1080 | 240 |
-| 1280 × 720 | 240 |
-| 4224 × 2240 | 120 |
-| 3840 × 2160 | 120 |
-| 1920 × 1080 | 120 |
+| `ContentView.swift` | Tab bar container only |
+| `RecordView.swift` | Capture screen: live preview, configuration picker, record button |
+| `Recorder.swift` | `CaptureConfig`, `ClipStore`, capture session, format selection, orientation, recording, file verification |
+| `ReviewView.swift` | Playback controller, transport, scrubbing, looping, frame stepping, clip browser |
 
-**240 fps at 1080p is available, so the Tech Stack target is met** and the project's largest risk is retired. Note that a format *supporting* 240 fps is not the same as a session *running* at 240 fps — that requires setting `activeVideoMinFrameDuration` explicitly.
+**App icon:** a placeholder in `Assets.xcassets/AppIcon.appiconset/`, cropped from an illustration to the ball. Only the Any Appearance slot is filled; iOS derives dark and tinted. To be revisited.
 
-Formats that look duplicated when listed by dimensions and frame rate alone are genuinely distinct — they differ in pixel format, binning, HDR support, or field of view.
+### Camera capability, measured on the test device
 
-**Intrinsic matrix availability measured across all 70 formats.** With video stabilization explicitly disabled, each format was applied in turn and the connection queried. Result: **66 of 70 formats support intrinsic matrix delivery, and the 4 that do not are exactly the four 240 fps formats.** Intrinsics and 240 fps are mutually exclusive on this device. Stabilization was ruled out as the cause — it was off during the scan.
+The back camera exposes **70 formats**. Every one was applied in turn, with video stabilization explicitly disabled, and its connection queried for intrinsic matrix support. Those relevant to measurement:
 
-The fastest formats that do deliver intrinsics:
-
-| Format | fps | Intrinsics | fx from FOV |
+| Resolution | Max fps | Intrinsics | fx from FOV |
 |---|---|---|---|
 | 1920 × 1080 | 240 | no | ≈ 1,260 px |
 | 1280 × 720 | 240 | no | ≈ 840 px |
@@ -147,18 +151,17 @@ The fastest formats that do deliver intrinsics:
 | 3840 × 2160 | 120 | yes | ≈ 2,520 px |
 | 1920 × 1080 | 120 | yes | ≈ 1,260 px |
 
-Field of view is 74.6° for both 1080p formats, so `fx ≈ 1,260 px` either way — the 240 fps format is not optically different, it simply will not report its matrix.
+**66 of 70 formats support intrinsic matrix delivery, and the 4 that do not are exactly the four 240 fps formats.** Intrinsics and 240 fps are mutually exclusive on this device. Stabilization was ruled out as the cause — it was off during the scan.
 
-**The app has two screens, reached from a tab bar.**
+Field of view is 74.6° for both 1080p formats, so `fx ≈ 1,260 px` either way. The 240 fps format is not optically different; it simply will not report its matrix.
 
-| File | Contents |
-|---|---|
-| `ContentView.swift` | Tab bar container only |
-| `RecordView.swift` | Capture screen: live preview, configuration picker, record button |
-| `Recorder.swift` | Capture session, format selection, recording, file verification, Photos save, `ClipStore` |
-| `ReviewView.swift` | Playback, transport, frame stepping, clip browser |
+Formats that look duplicated when listed by dimensions and frame rate alone are genuinely distinct — they differ in pixel format, binning, HDR support, or field of view.
 
-**Capture works end to end, verified on the device.** Both configurations record, save, and read back correctly:
+Note that a format *supporting* 240 fps is not the same as a session *running* at 240 fps. That requires setting `activeVideoMinFrameDuration` explicitly.
+
+### Capture
+
+Both configurations record and read back correctly, verified from the finished files rather than from what the camera was asked for:
 
 | Selected | File contents |
 |---|---|
@@ -167,35 +170,7 @@ Field of view is 74.6° for both 1080p formats, so `fx ≈ 1,260 px` either way 
 
 Frame counts corroborate the rates in both cases, so the format survives recording and is not silently overridden.
 
-**Reported rates are 239.9 and 119.9, not 240 and 120** — these are the NTSC-derived rates of 240 ÷ 1.001 and 120 ÷ 1.001. The 0.1% difference is negligible in itself, but it establishes that `nominalFrameRate` is a label rather than a measurement. **Δt must come from each frame's presentation timestamp, never from `1 / nominalFrameRate`.**
-
-**Photos retimes high-frame-rate clips, and cannot be used as the source of truth.** Saving a 240 fps clip to Photos makes iOS classify it as slow motion, and exporting it back returns a **30 fps** file — exactly 240 ÷ 8, with duration stretched 8×. Measured: a 768-frame clip came back as 768 frames at 30 fps over 23.6 s.
-
-**Every frame survives the round trip; only the timestamps lie.** Nothing is lost, but Δt would read 1/30 s instead of 1/240 s, making every velocity 8× too slow with no visible symptom.
-
-**Therefore the app owns its clips outright.** Recordings are written directly to `Documents/Clips/`, managed by `ClipStore`, and **nothing is written to Photos at all**. The review screen reads only from that directory — the Photos picker was removed rather than left available, because an input path that silently returns 8×-wrong timing is not something to leave next to a "choose clip" button.
-
-Clips are deleted from the clip list, either by swiping a row or via the Edit button. Nothing else prunes the directory, and 4K/120 runs roughly 6 MB per second, so this matters.
-
-`NSPhotoLibraryAddUsageDescription` remains in the target's Info settings but is unused and inert, since the app no longer requests Photos access.
-
-The app library is not visible in the Files app; `Documents` is private unless the project opts into file sharing.
-
-**Video review works.** All verified on the device:
-
-- Playback and pause, at 1×, 1/2, 1/4, and 1/8
-- Frame-accurate stepping — `AVPlayerItem.step(byCount:)` advances exactly one frame per tap
-- Restart, returning to frame 0 and staying paused
-- A scrub bar for coarse positioning, with the step buttons for fine adjustment
-- Section looping: mark In and Out, then repeat that stretch continuously. Marking Out before In swaps them rather than refusing.
-- Continuous reverse playback at the selected speed. `canPlayReverse` is true for these clips, so the recorded encoding supports backwards decode and no codec change is needed.
-- Controls overlay the video and auto-hide after 3 seconds, so the picture fills the screen in both orientations. They never auto-hide when no clip is loaded, or the "Choose clip" button would vanish with no way back.
-
-**1/8 is the rate at which a 240 fps clip shows every frame.** 240 ÷ 8 = 30 frames displayed per second. At 1× the display physically cannot show all 240, so frames are dropped and the reviewer is not seeing everything that was recorded. The equivalent for 4K/120 is 1/4. Slower than that repeats frames rather than revealing new ones.
-
-**Seeking uses two different modes, deliberately.** While the scrubber is being dragged, seeks use infinite tolerance — "any nearby keyframe will do" — which is the cheapest seek available. On release, a zero-tolerance seek snaps to the exact frame. Restart does the same. One mode alone cannot give both a responsive drag and a frame-accurate resting position.
-
-**Seeks are coalesced: at most one in flight, and only the newest target is kept.** A drag emits values far faster than AVPlayer can service them, and queueing every one makes the picture fall progressively behind the finger. Intermediate positions are dropped on purpose.
+**Reported rates are 239.9 and 119.9, not 240 and 120** — the NTSC-derived rates of 240 ÷ 1.001 and 120 ÷ 1.001. The 0.1% difference is negligible in itself, but it establishes that `nominalFrameRate` is a label rather than a measurement. **Δt must come from each frame's presentation timestamp, never from `1 / nominalFrameRate`.**
 
 **Recording follows device orientation.** `AVCaptureDevice.RotationCoordinator` supplies `videoRotationAngleForHorizonLevelCapture`, applied to both the movie output connection and the preview layer. Without it the capture connection stays at its portrait default however the phone is held — the UI rotates and the pixels do not. Three details that each caused or would have caused a bug:
 
@@ -203,16 +178,45 @@ The app library is not visible in the Files app; `Documents` is private unless t
 - Rotation is not changed while recording, which would otherwise split orientation across one file.
 - Rotation is re-applied after every format change, because switching configuration rebuilds the connection and silently resets it to portrait.
 
-**Consequence for analysis:** clips now carry a `preferredTransform` describing their rotation. The tracking code must apply it before treating pixel coordinates as physical. Getting this wrong would swap the trajectory's axes and turn launch angle into its complement.
+**Consequence for analysis:** clips carry a `preferredTransform` describing their rotation. The tracking code must apply it before treating pixel coordinates as physical. Getting this wrong would swap the trajectory's axes and turn launch angle into its complement.
 
-**Concurrency.** Capture state (`session`, `movieOutput`, `device`, `activeConfig`) is confined to `sessionQueue` and marked `nonisolated(unsafe)`; published UI state is main-actor and written only through the `set(...)` helpers. `Recorder` is `@unchecked Sendable`, which is a promise backed by that queue confinement rather than a compiler-checked guarantee. This replaced a real data race where the capture path read main-actor state from a background queue.
+**Concurrency.** Capture state (`session`, `movieOutput`, `device`, `activeConfig`) is confined to `sessionQueue` and marked `nonisolated(unsafe)`; published UI state is main-actor and written only through the `set(...)` helpers. `Recorder` is `@unchecked Sendable` — a promise backed by that queue confinement rather than a compiler-checked guarantee. This replaced a real data race where the capture path read main-actor state from a background queue.
 
-**App icon:** a placeholder icon is installed in `Assets.xcassets/AppIcon.appiconset/`, cropped from an illustration to the ball. Only the Any Appearance slot is filled; iOS derives dark and tinted automatically. Placeholder quality, to be revisited.
+### Storage
 
-**Published to GitHub:** `https://github.com/rgw3/gk`, private, remote `origin`, branch `main`. `.gitignore` covers Xcode noise; `xcuserdata` is untracked.
+**Photos retimes high-frame-rate clips and cannot be used as a source of truth.** Saving a 240 fps clip to Photos makes iOS classify it as slow motion, and reading it back returns a **30 fps** file — exactly 240 ÷ 8, duration stretched 8×. Measured: a 768-frame clip came back as 768 frames at 30 fps over 23.6 s.
+
+**Every frame survives the round trip; only the timestamps lie.** Nothing is lost, but Δt would read 1/30 s instead of 1/240 s, making every velocity 8× too slow with no visible symptom.
+
+**Therefore the app owns its clips outright.** Recordings are written directly to `Documents/Clips/`, managed by `ClipStore`. **Nothing is written to Photos at all.** The review screen reads only from that directory — the Photos picker was removed rather than left available, because an input path that silently returns 8×-wrong timing is not something to leave next to a "choose clip" button.
+
+Clips are deleted from the clip list, by swiping a row or via the Edit button. Nothing else prunes the directory, and 4K/120 runs roughly 6 MB per second, so this matters.
+
+`NSPhotoLibraryAddUsageDescription` remains in the target's Info settings but is unused and inert, since the app no longer requests Photos access.
+
+The app library is not visible in the Files app; `Documents` is private unless the project opts into file sharing.
+
+### Review
+
+All verified on the device:
+
+- Playback and pause at 1×, 1/2, 1/4, and 1/8
+- Frame-accurate stepping — `AVPlayerItem.step(byCount:)` advances exactly one frame per tap
+- Restart, returning to frame 0 and staying paused
+- A scrub bar for coarse positioning, with the step buttons for fine adjustment
+- Section looping: mark In and Out, then repeat that stretch continuously. Marking Out before In swaps them rather than refusing.
+- Continuous reverse playback at the selected speed. `canPlayReverse` is true for these clips, so the encoding supports backwards decode and no codec change is needed.
+- Controls overlay the video and auto-hide after 3 seconds, so the picture fills the screen in both orientations. They never auto-hide when no clip is loaded, or the "Choose clip" button would vanish with no way back.
+
+**1/8 is the rate at which a 240 fps clip shows every frame.** 240 ÷ 8 = 30 frames displayed per second. At 1× the display physically cannot show all 240, so frames are dropped and the reviewer is not seeing everything that was recorded. The equivalent for 4K/120 is 1/4. Slower than that repeats frames rather than revealing new ones.
+
+**Seeking uses two modes, deliberately.** While the scrubber is dragged, seeks use infinite tolerance — "any nearby keyframe will do" — the cheapest seek available. On release, a zero-tolerance seek snaps to the exact frame. Restart does the same. One mode alone cannot give both a responsive drag and a frame-accurate resting position.
+
+**Seeks are coalesced: at most one in flight, and only the newest target is kept.** A drag emits values far faster than AVPlayer can service them, and queueing every one makes the picture fall progressively behind the finger. Intermediate positions are dropped on purpose.
 
 ### Standing constraints from the free-tier account
-- Builds signed under a Personal Team **stop launching after 7 days** and must be re-run from Xcode. This is expected behavior, not a bug.
+
+- Builds signed under a Personal Team **stop launching after 7 days** and must be re-run from Xcode. Expected behavior, not a bug.
 - TestFlight and App Store distribution are unavailable without the paid program ($99/year).
 - A Personal Team is capped at **10 App IDs per 7-day period**, so bundle identifiers should be chosen deliberately rather than by trial and error.
 
