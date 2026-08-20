@@ -183,11 +183,15 @@ The app library is not visible in the Files app; `Documents` is private unless t
 
 **Video review works.** All verified on the device:
 
-- Playback, pause, 1/2 and 1/4 speed
+- Playback and pause, at 1×, 1/2, 1/4, and 1/8
 - Frame-accurate stepping — `AVPlayerItem.step(byCount:)` advances exactly one frame per tap
 - Restart, returning to frame 0 and staying paused
 - A scrub bar for coarse positioning, with the step buttons for fine adjustment
+- Section looping: mark In and Out, then repeat that stretch continuously. Marking Out before In swaps them rather than refusing.
+- Continuous reverse playback at the selected speed. `canPlayReverse` is true for these clips, so the recorded encoding supports backwards decode and no codec change is needed.
 - Controls overlay the video and auto-hide after 3 seconds, so the picture fills the screen in both orientations. They never auto-hide when no clip is loaded, or the "Choose clip" button would vanish with no way back.
+
+**1/8 is the rate at which a 240 fps clip shows every frame.** 240 ÷ 8 = 30 frames displayed per second. At 1× the display physically cannot show all 240, so frames are dropped and the reviewer is not seeing everything that was recorded. The equivalent for 4K/120 is 1/4. Slower than that repeats frames rather than revealing new ones.
 
 **Seeking uses two different modes, deliberately.** While the scrubber is being dragged, seeks use infinite tolerance — "any nearby keyframe will do" — which is the cheapest seek available. On release, a zero-tolerance seek snaps to the exact frame. Restart does the same. One mode alone cannot give both a responsive drag and a frame-accurate resting position.
 
@@ -216,7 +220,7 @@ The app library is not visible in the Files app; `Documents` is private unless t
 
 **Step 1 — Capture spike. COMPLETE.** High-speed capture, recording, and storage in the app's own library all work and are verified on the device. The one criterion that resolved differently: the step originally required confirming intrinsic matrix delivery. Intrinsics are unavailable at 240 fps, but the underlying requirement — obtaining focal length — is satisfied through field of view instead. The requirement was met; the originally stated mechanism was too narrow.
 
-**Step 2 — Video review screen. COMPLETE.** Playback, pause, 1/2 and 1/4 speed, and frame-by-frame stepping all verified on the device. Every playback control Deliverable 1 asks for now exists, plus restart and a scrub bar beyond it.
+**Step 2 — Video review screen. COMPLETE.** Every playback control Deliverable 1 asks for — pause, 1/2 and 1/4 speed, frame-by-frame stepping — is verified on the device, along with 1/8 speed, restart, scrubbing, section looping, and reverse playback beyond the requirement.
 
 **Step 3 — Ball tracking spike.** Detect and track the ball across frames of a real goal kick, and report its pixel position and apparent diameter per frame. Start with Vision's `VNTrackObjectRequest`; fall back to a trained Core ML detector if motion blur defeats it.
 

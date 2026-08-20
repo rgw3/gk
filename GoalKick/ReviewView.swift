@@ -30,6 +30,14 @@ final class ReviewPlayer: ObservableObject {
     /// While the user drags the scrubber, the time observer must not fight
     /// the slider for control of currentTime.
     @Published private(set) var isScrubbing = false
+    @Published private(set) var isReversing = false
+
+    // Loop range, in seconds. Both ends must be set for looping to engage.
+    @Published private(set) var loopStart: Double?
+    @Published private(set) var loopEnd: Double?
+    @Published private(set) var isLooping = false
+
+    private var isLoopSeeking = false
 
     private var timeObserver: Any?
 
@@ -46,6 +54,7 @@ final class ReviewPlayer: ObservableObject {
 
     func load(url: URL) async {
         teardown()
+        clearLoop()
         status = "Loading…"
 
         let asset = AVURLAsset(url: url)
@@ -91,6 +100,7 @@ final class ReviewPlayer: ObservableObject {
                 if abs(seconds - self.currentTime) > 0.001 {
                     self.currentTime = seconds
                 }
+                self.enforceLoopIfNeeded(at: seconds)
             }
         }
     }
@@ -112,21 +122,116 @@ final class ReviewPlayer: ObservableObject {
 
     func togglePlay() {
         guard let player else { return }
-        if isPlaying {
-            player.pause()
-            isPlaying = false
+        if isPlaying && !isReversing {
+            pause()
         } else {
             // Setting rate directly is what produces slow playback;
             // play() would always resume at 1.0.
+            isReversing = false
             player.rate = Float(speed)
             isPlaying = true
         }
     }
 
+    /// Continuous playback backwards. Not all encodings support it, so the
+    /// item is asked before the rate is set.
+    func toggleReverse() {
+        guard let player, let item = player.currentItem else { return }
+        if isPlaying && isReversing {
+            pause()
+            return
+        }
+        guard item.canPlayReverse else {
+            status = "This clip cannot play in reverse — use frame step"
+            return
+        }
+        isReversing = true
+        player.rate = -Float(speed)
+        isPlaying = true
+    }
+
+    func pause() {
+        player?.pause()
+        isPlaying = false
+        isReversing = false
+    }
+
     func setSpeed(_ newSpeed: Double) {
         speed = newSpeed
         guard let player, isPlaying else { return }
-        player.rate = Float(newSpeed)
+        player.rate = Float(newSpeed) * (isReversing ? -1 : 1)
+    }
+
+    // MARK: Looping
+
+    func markIn() {
+        loopStart = currentTime
+        normalizeLoop()
+    }
+
+    func markOut() {
+        loopEnd = currentTime
+        normalizeLoop()
+    }
+
+    func clearLoop() {
+        loopStart = nil
+        loopEnd = nil
+        isLooping = false
+    }
+
+    func toggleLoop() {
+        guard hasLoopRange else {
+            status = "Set both In and Out first"
+            return
+        }
+        isLooping.toggle()
+    }
+
+    var hasLoopRange: Bool {
+        guard let loopStart, let loopEnd else { return false }
+        return loopEnd > loopStart
+    }
+
+    /// Marking Out before In is a natural mistake; swap rather than refuse.
+    private func normalizeLoop() {
+        if let start = loopStart, let end = loopEnd, end < start {
+            loopStart = end
+            loopEnd = start
+        }
+    }
+
+    private func enforceLoopIfNeeded(at seconds: Double) {
+        guard isLooping, isPlaying, !isLoopSeeking,
+              let start = loopStart, let end = loopEnd, end > start else { return }
+
+        if isReversing {
+            guard seconds <= start else { return }
+            loopJump(to: end)
+        } else {
+            guard seconds >= end else { return }
+            loopJump(to: start)
+        }
+    }
+
+    private func loopJump(to seconds: Double) {
+        guard let player else { return }
+        isLoopSeeking = true
+        // The rate is captured and restored because a seek can leave the
+        // player stopped, which would end the loop after one pass.
+        let rate = player.rate
+        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600),
+                    toleranceBefore: .zero,
+                    toleranceAfter: .zero) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                self.isLoopSeeking = false
+                self.currentTime = seconds
+                if self.isPlaying {
+                    player.rate = rate
+                }
+            }
+        }
     }
 
     // MARK: Scrubbing
@@ -135,8 +240,7 @@ final class ReviewPlayer: ObservableObject {
     private var pendingSeekTime: Double?
 
     func beginScrub() {
-        player?.pause()
-        isPlaying = false
+        pause()
         isScrubbing = true
     }
 
@@ -164,8 +268,12 @@ final class ReviewPlayer: ObservableObject {
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
                     toleranceBefore: .positiveInfinity,
                     toleranceAfter: .positiveInfinity) { [weak self] _ in
+            // Bound here so the nested Task captures an immutable value.
+            // Referencing a weakly captured self across a second
+            // concurrency boundary is an error in Swift 6.
+            guard let self else { return }
             Task { @MainActor in
-                self?.seekCompleted()
+                self.seekCompleted()
             }
         }
     }
@@ -193,8 +301,7 @@ final class ReviewPlayer: ObservableObject {
     /// Returns to the first frame and stays paused.
     func restart() {
         guard let player else { return }
-        player.pause()
-        isPlaying = false
+        pause()
         // Zero tolerance forces an exact seek rather than the nearest
         // keyframe, so this lands on frame 0 and not merely near it.
         player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
@@ -204,8 +311,7 @@ final class ReviewPlayer: ObservableObject {
     /// Steps exactly one frame. Stepping requires a paused player.
     func step(_ count: Int) {
         guard let player, let item = player.currentItem else { return }
-        player.pause()
-        isPlaying = false
+        pause()
 
         let canStep = count > 0 ? item.canStepForward : item.canStepBackward
         guard canStep else {
@@ -312,7 +418,7 @@ struct ReviewView: View {
     @State private var controlsVisible = true
     @State private var hideTask: Task<Void, Never>?
 
-    private let speeds: [Double] = [1.0, 0.5, 0.25]
+    private let speeds: [Double] = [1.0, 0.5, 0.25, 0.125]
 
     var body: some View {
         ZStack {
@@ -394,6 +500,7 @@ struct ReviewView: View {
                 scrubBar
                 transportRow
                 speedRow
+                loopRow
             } else {
                 Text(review.status)
                     .font(.system(.caption, design: .monospaced))
@@ -427,6 +534,11 @@ struct ReviewView: View {
             Text(review.status)
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.65))
+            if let start = review.loopStart, let end = review.loopEnd {
+                Text("loop \(start, specifier: "%.3f") → \(end, specifier: "%.3f") s")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(review.isLooping ? .green : .white.opacity(0.5))
+            }
         }
     }
 
@@ -451,14 +563,47 @@ struct ReviewView: View {
     }
 
     private var transportRow: some View {
-        HStack(spacing: 24) {
-            transportButton("backward.end.fill", size: 24) { review.restart() }
-            transportButton("backward.frame.fill", size: 26) { review.step(-1) }
-            transportButton(review.isPlaying ? "pause.circle.fill" : "play.circle.fill",
+        HStack(spacing: 20) {
+            transportButton("backward.end.fill", size: 22) { review.restart() }
+            transportButton("backward.frame.fill", size: 24) { review.step(-1) }
+            transportButton(review.isPlaying && review.isReversing
+                            ? "pause.circle.fill" : "play.circle.fill",
+                            size: 34) { review.toggleReverse() }
+                .rotation3DEffect(.degrees(review.isPlaying && review.isReversing ? 0 : 180),
+                                  axis: (x: 0, y: 1, z: 0))
+            transportButton(review.isPlaying && !review.isReversing
+                            ? "pause.circle.fill" : "play.circle.fill",
                             size: 42) { review.togglePlay() }
-            transportButton("forward.frame.fill", size: 26) { review.step(1) }
+            transportButton("forward.frame.fill", size: 24) { review.step(1) }
         }
         .foregroundStyle(.white)
+    }
+
+    private var loopRow: some View {
+        HStack(spacing: 8) {
+            loopButton("In", active: review.loopStart != nil) { review.markIn() }
+            loopButton("Out", active: review.loopEnd != nil) { review.markOut() }
+            loopButton(review.isLooping ? "Loop on" : "Loop",
+                       active: review.isLooping) { review.toggleLoop() }
+            loopButton("Clear", active: false) { review.clearLoop() }
+        }
+    }
+
+    private func loopButton(_ title: String,
+                            active: Bool,
+                            action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            revealControls()
+        } label: {
+            Text(title)
+                .font(.system(.caption, design: .monospaced))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background(active ? .green.opacity(0.85) : .white.opacity(0.15),
+                            in: RoundedRectangle(cornerRadius: 8))
+                .foregroundStyle(active ? .black : .white)
+        }
     }
 
     private func transportButton(_ symbol: String,
@@ -497,6 +642,7 @@ struct ReviewView: View {
         case 1.0: return "1×"
         case 0.5: return "1/2"
         case 0.25: return "1/4"
+        case 0.125: return "1/8"
         default: return "\(speed)×"
         }
     }
