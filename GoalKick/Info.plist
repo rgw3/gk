@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  This file holds only the Info keys that Xcode's INFOPLIST_KEY_ build
+	  setting mechanism cannot express. That mechanism recognises a fixed
+	  allowlist of key names; anything outside it is silently ignored, with
+	  no error and no warning.
+
+	  Everything else - camera usage description, supported orientations,
+	  launch screen, scene manifest - is still generated from build settings
+	  by GENERATE_INFOPLIST_FILE, and the two are merged at build time.
+	  Do not duplicate those keys here.
+	-->
+
+	<!--
+	  Exposes the app's Documents directory in the Files app under
+	  On My iPhone / On My iPad, which is how recorded clips get off the
+	  device. AirDrop from Files copies the file byte for byte, so true
+	  frame timing survives the transfer - unlike Photos, which retimes
+	  high frame rate clips and would make every velocity wrong.
+	-->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+</dict>
+</plist>
