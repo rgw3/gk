@@ -112,6 +112,19 @@ The app is built as a **native iOS app in Swift**. This is decided. The requirem
 
 What exists is everything *around* the measurement: a way to capture footage good enough to measure from, a way to move it off the device without corrupting its timing, and a way to look at it frame by frame on a screen big enough to share with the kicker. All verified on hardware. None of it computes anything.
 
+**Two inputs Deliverable 1 depends on are also missing.** There is no way to tell the app the ball's size, and no decision on the flight model behind carry distance and max height. Both are listed under Open Questions.
+
+### What is done
+
+Each of these is verified on hardware, not merely written. Details are in the sections below.
+
+| Milestone | Outcome |
+|---|---|
+| **Capture spike** | High-speed capture, recording, and storage in the app's own library. The step originally required confirming intrinsic matrix delivery; intrinsics turned out to be unavailable at 240 fps, but the underlying requirement — obtaining focal length — is met through field of view. |
+| **Video review screen** | Every playback control Deliverable 1 asks for, plus 1/8 speed, restart, scrubbing, section looping, and reverse playback beyond the requirement. |
+| **Clip transfer off the device** | File sharing exposes `Documents/` in the Files app, and AirDrop moves clips to the iPad or the Mac with frame timing intact. |
+| **iPad as the review device** | No port was needed. The app was already universal and the review screen required no layout changes. |
+
 ### Environment
 
 - **Mac:** macOS 26, Xcode 26 from the Mac App Store, iOS 26 platform installed, command line tools pointed at Xcode.
@@ -126,7 +139,8 @@ Build, sign, install, and launch are confirmed working on both devices. Getting 
 
 - **Location:** `/Users/rocket/Github/gk/GoalKick/`
 - **Bundle identifier:** `com.rocket.GoalKick`
-- **Targets:** `GoalKick`, `GoalKickTests`, `GoalKickUITests`
+- **Targets:** `GoalKick`, `GoalKickTests`, `GoalKickUITests`. **The two test targets are untouched Xcode template stubs** — no test has been written for this project. Whether to start is undecided; nothing in the build depends on them.
+- **Deployment target:** iOS 26.5 (`IPHONEOS_DEPLOYMENT_TARGET = 26.5`). Any API is fair game; nothing needs availability guards.
 - **Configured as:** SwiftUI interface, Storage None, CloudKit off
 - **Device family:** `TARGETED_DEVICE_FAMILY = "1,2"` — iPhone and iPad. The app has always been universal; running on iPad needs no port. All four iPad orientations are already permitted.
 - **Version control:** Git at the project root, pushed to `https://github.com/rgw3/gk` (private, remote `origin`, branch `main`). `.gitignore` covers Xcode noise; `xcuserdata` is untracked.
@@ -135,7 +149,7 @@ Build, sign, install, and launch are confirmed working on both devices. Getting 
 
 | File | Contents |
 |---|---|
-| `ContentView.swift` | Tab bar container only |
+| `ContentView.swift` | Tab bar container only. Two tabs: **Record** and **Review**. |
 | `RecordView.swift` | Capture screen: live preview, configuration picker, record button |
 | `Recorder.swift` | `CaptureConfig`, `ClipStore`, capture session, format selection, orientation, recording, file verification |
 | `ReviewView.swift` | Playback controller, transport, scrubbing, looping, frame stepping, clip browser |
@@ -204,6 +218,8 @@ Clips are deleted from the clip list, by swiping a row or via the Edit button. N
 
 **The app opts into file sharing, so `Documents/` is visible in the Files app** under *On My iPhone → GoalKick*, with `Clips` inside it. This is the supported way to move a recording to another device or to the Mac.
 
+**The working loop, verified on hardware:** record on the iPhone → Files → *On My iPhone → GoalKick → Clips* → share the `.mov` → AirDrop to the iPad → **Save to Files**, into GoalKick's own `Clips` folder → the clip appears in the review browser.
+
 **AirDrop from Files copies the file byte for byte, so true frame timing survives.** This is the critical difference from Photos, which retimes and would make every velocity wrong. On the receiving device, **save to Files, never to Photos** — the share sheet offers both and the wrong one is silently destructive.
 
 AirDrop needs no network. It discovers over Bluetooth LE and then transfers over a direct peer-to-peer Wi-Fi link, so it works on a pitch with no coverage, provided Wi-Fi and Bluetooth are both switched on in Settings. This is what rules out an iCloud-shared library independently of cost: iCloud would fail exactly where the app is used.
@@ -238,6 +254,8 @@ All verified on the device:
 
 **Review happens on the iPad Air 11".** A 6" phone is too small to show a kicker their own technique. The app is universal (`TARGETED_DEVICE_FAMILY = "1,2"`) and needed no port and no layout changes — SwiftUI adapted the clip browser sheet by itself. Clips reach the iPad through the AirDrop path described under *Getting clips off the device*.
 
+**Capture stays on the iPhone.** No iPad is expected to offer 1080p/240 or 4K/120, so `applyFormat` would find no matching format and set the status to "No format matching …" — it fails visibly rather than crashing, but the footage would not be measurable. **This has not been confirmed on the iPad**, and the 70-format scan used during the capture spike is no longer in the codebase. It does not need confirming unless capture on iPad is ever wanted.
+
 Playback work can be validated in the iOS Simulator; capture work cannot, because the Simulator has no camera and exposes no real capture formats.
 
 ### Standing constraints from the free-tier account
@@ -248,19 +266,7 @@ Playback work can be validated in the iOS Simulator; capture work cannot, becaus
 
 ## Next Steps
 
-**Step 1 — Capture spike. COMPLETE.** High-speed capture, recording, and storage in the app's own library all work and are verified on the device. The one criterion that resolved differently: the step originally required confirming intrinsic matrix delivery. Intrinsics are unavailable at 240 fps, but the underlying requirement — obtaining focal length — is satisfied through field of view instead. The requirement was met; the originally stated mechanism was too narrow.
-
-**Step 2 — Video review screen. COMPLETE.** Every playback control Deliverable 1 asks for — pause, 1/2 and 1/4 speed, frame-by-frame stepping — is verified on the device, along with 1/8 speed, restart, scrubbing, section looping, and reverse playback beyond the requirement.
-
-**Side track — iPad Air as the review device. COMPLETE.** Reviewing a kick with the kicker on a 6" phone is cramped. **The iPad Air 11" is now the review device and the workflow is verified on hardware.**
-
-No port was needed. The app was already universal, the review screen required no layout changes, and SwiftUI adapted the clip browser sheet on its own.
-
-**The working loop is:** record on the iPhone → Files → *On My iPhone → GoalKick → Clips* → share the `.mov` → AirDrop to the iPad → **Save to Files**, into GoalKick's own `Clips` folder → the clip appears in the review browser.
-
-**Capture stays on the iPhone.** No iPad is expected to offer 1080p/240 or 4K/120, so `applyFormat` would find no matching format and report "No format matching …" — it fails visibly rather than crashing, but the footage would not be measurable. **This has not been confirmed on the iPad**, and the 70-format scan used during the capture spike is no longer in the codebase. It does not need confirming unless capture on iPad is ever wanted.
-
-Two refinements remain **available but unbuilt**, since the manual path works: a `ShareLink` in the clip browser, and a `CFBundleDocumentTypes` declaration plus an `onOpenURL` handler so AirDrop delivers straight into GoalKick rather than via Files. Neither changes what is possible, only how many taps it takes pitch-side. Build them if the Files detour becomes irritating in real use, not before.
+Completed work is recorded under *Current State → What is done*. This section holds only what has not been done.
 
 **Step 3 — Ball tracking spike.** Detect and track the ball across frames of a real goal kick, and report its pixel position and apparent diameter per frame. Start with Vision's `VNTrackObjectRequest`; fall back to a trained Core ML detector if motion blur defeats it.
 
@@ -274,15 +280,42 @@ This is the largest remaining unknown in the project. Nothing about velocity, la
 
 **File sharing also unblocks tracker development on the Mac.** Clips can now be pulled from *On My iPhone → GoalKick → Clips* onto the Mac, so tracking code can be developed and debugged against real footage with real timestamps rather than against the device. Expect to want this from the first day of Step 3.
 
+**Step 4 — Metrics.** Turn the per-frame table from Step 3 into velocity, launch angle, carry distance, and max height. Not specified yet; it depends on the flight model and the ball-size input, both of which are open questions below.
+
+### Optional, not scheduled
+
+Two clip-transfer refinements are **available but unbuilt**, since the manual path works: a `ShareLink` in the clip browser, and a `CFBundleDocumentTypes` declaration plus an `onOpenURL` handler so AirDrop delivers straight into GoalKick rather than via Files. Neither changes what is possible, only how many taps it takes pitch-side. Build them if the Files detour becomes irritating in real use, not before.
+
 ## Open Questions
 
 **Which capture configuration gives better metric accuracy: 1080p at 240 fps, or 4K at 120 fps?**
 
 - **1080p at 240 fps** — roughly 12.5 cm of ball travel between frames at 30 m/s. Twice the trajectory samples, and the shorter per-frame exposure means less motion blur, which matters because blur inflates the apparent ball diameter and degrades the centroid. Calibrated from field of view; no intrinsic matrix available.
-- **4K at 120 fps** — roughly 25 cm between frames, but four times the pixels across the ball, so a more precise diameter estimate, which propagates into distance and therefore into every metric. Intrinsic matrix available.
+- **4K at 120 fps** — roughly 25 cm between frames, but four times the pixels across the ball, so a more precise diameter estimate, which propagates into distance and therefore into every metric.
+
+**Both configurations are currently calibrated from field of view, and 4K/120's intrinsic matrix is not in fact an advantage today.** The camera reports intrinsics only to a live capture session; they are **not stored in the recorded movie file**. Deliverable 1 analyses a saved video, so intrinsics are unavailable at analysis time unless they are captured alongside the recording and written to a sidecar — which has not been built. Until it is, the choice is purely samples-and-blur versus pixels-on-ball.
 
 **Settle this by filming the same goal kick both ways once tracking exists**, not from first principles. The recorder offers both configurations so that comparison is possible.
 
-**Related and unresolved:** the intrinsic matrix is delivered per frame to a live capture session and is **not stored in a recorded movie file**. Since Deliverable 1 analyses a saved video, using intrinsics at analysis time would require capturing them alongside the recording and storing them in a sidecar. If we do not do that, the practical calibration route is field of view for both configurations — which would substantially collapse the advantage of 4K/120 above.
+**What flight model produces carry distance and max height — drag-free, or with air resistance?**
+
+Undecided, and the two answers differ enormously. A size 4 or 5 ball leaving the foot at ~30 m/s is deep in a drag-dominated regime; a vacuum parabola can overestimate carry by roughly a factor of two. This is not a refinement, it is the difference between a number that means something and one that does not.
+
+- **Drag-free parabola** — closed form, no parameters beyond launch velocity and angle, and defensible if the figure is presented explicitly as a theoretical maximum rather than a prediction of where the ball would land.
+- **With drag** — needs a drag coefficient and a ball mass, and realistically numerical integration rather than a closed form. Closer to reality, but introduces constants the app cannot measure and must assume.
+
+Deliverable 1's wording, "theoretical carry distance," leans toward the first. That has never been confirmed as a decision, and **whichever is chosen must be stated in the UI**, or the coach will read a theoretical maximum as a real distance.
+
+**How does the app learn the ball's size?**
+
+Deliverable 1 states the ball's physical size is the only measurement input, and **nothing in the app collects it.** There is no picker, no stored setting, and no constant in the code. Scale calibration cannot work without it.
+
+Open sub-questions: a picker of standard sizes (3, 4, 5) versus a diameter in millimetres; whether it is set per clip or once as a setting; and whether it is captured at record time or at analysis time. Recording it per clip at capture time is the safer default, since a clip whose ball size is unknown later is not measurable at all.
+
+**How should a goal kick be filmed?**
+
+Unrecorded, and it gates Step 3's feasibility. Camera distance, angle relative to the kick direction, and whether the operator pans or holds the phone fixed all change how hard tracking is and how accurate the result can be. Panning in particular moves the background, which affects tracker behaviour, and changes what the camera attitude correction has to account for.
+
+Establish a repeatable protocol while filming the first clips, and record it here, so later footage is comparable with earlier footage.
 
 ## End of Document
