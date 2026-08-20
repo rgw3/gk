@@ -2,7 +2,8 @@
 //  Recorder.swift
 //  GoalKick
 //
-//  High frame rate capture: format selection, recording, and saving to Photos.
+//  High frame rate capture: format selection, recording, and file verification.
+//  Clips are written to the app's own storage. Nothing is written to Photos.
 //
 //  Threading: published properties are main-actor state for the UI. Everything
 //  the capture pipeline touches — session, outputs, device, active config — is
@@ -339,7 +340,7 @@ final class Recorder: NSObject, ObservableObject, @unchecked Sendable {
                 self.movieOutput.stopRecording()
             } else {
                 // Recorded straight into the app's own storage. This file is
-                // the master; the Photos copy is a convenience for the coach.
+                // the only copy, and the only one with true frame timing.
                 let url = ClipStore.newClipURL(for: self.activeConfig)
                 self.movieOutput.startRecording(to: url, recordingDelegate: self)
             }

@@ -92,7 +92,7 @@ The app is built as a **native iOS app in Swift**. This is decided. The requirem
 | Numerics | Accelerate / vImage; Metal only if profiling demands it |
 | Playback | `AVPlayer`, driven by setting `rate` directly for slow and reverse playback, and `AVPlayerItem.step(byCount:)` for frame stepping |
 | Camera attitude | CoreMotion, to correct launch angle for camera tilt |
-| Storage | The app's own `Documents/Clips/`, managed by `ClipStore`. The only copy, and the only source with true timing. Nothing is written to Photos. |
+| Storage | The app's own `Documents/Clips/`, managed by `ClipStore`. The only copy, and the only source with true timing. Nothing is written to Photos. Exposed in the Files app via `UIFileSharingEnabled` so clips can be AirDropped to the iPad or the Mac. |
 | Dependencies | None third-party |
 
 **Scale calibration:** the known ball diameter plus the camera's **focal length in pixels** is how real-world distance is recovered from apparent pixel size. Focal length is the hard requirement; the intrinsic matrix is only one of two ways to obtain it.
@@ -110,15 +110,17 @@ The app is built as a **native iOS app in Swift**. This is decided. The requirem
 
 **There is no measurement code of any kind.** No ball detection, no tracking, no velocity, no launch angle, no carry distance, no max height. Deliverable 1's actual metrics are entirely unstarted, and their feasibility has not been demonstrated.
 
-What exists is everything *around* the measurement: a way to capture footage good enough to measure from, and a way to look at it frame by frame. Both are verified on hardware. Neither computes anything.
+What exists is everything *around* the measurement: a way to capture footage good enough to measure from, a way to move it off the device without corrupting its timing, and a way to look at it frame by frame on a screen big enough to share with the kicker. All verified on hardware. None of it computes anything.
 
 ### Environment
 
 - **Mac:** macOS 26, Xcode 26 from the Mac App Store, iOS 26 platform installed, command line tools pointed at Xcode.
-- **Test devices:** "Rocket's iPhone," paired over cable, Developer Mode enabled, developer certificate trusted. An **iPad Air 11" (Wi-Fi only)** is being evaluated as a review device — see below.
+- **Test devices:** two, with different jobs.
+  - **"Rocket's iPhone"** — the **capture** device. Paired over cable, Developer Mode enabled, developer certificate trusted.
+  - **iPad Air 11" (Wi-Fi only)** — the **review** device, verified working. Capture is not attempted on it; see the Review section.
 - **Signing:** free Apple ID under a Personal Team (Robert Williams), automatic signing. Not enrolled in the paid Apple Developer Program.
 
-Build, sign, install, and launch on the physical device are all confirmed working. Getting code onto the phone is a solved problem.
+Build, sign, install, and launch are confirmed working on both devices. Getting code onto hardware is a solved problem. Note the 7-day Personal Team expiry now applies to two devices rather than one.
 
 ### Project
 
@@ -143,9 +145,9 @@ Build, sign, install, and launch on the physical device are all confirmed workin
 
 **App icon:** a placeholder in `Assets.xcassets/AppIcon.appiconset/`, cropped from an illustration to the ball. Only the Any Appearance slot is filled; iOS derives dark and tinted. To be revisited.
 
-### Camera capability, measured on the test device
+### Camera capability, measured on the iPhone
 
-The back camera exposes **70 formats**. Every one was applied in turn, with video stabilization explicitly disabled, and its connection queried for intrinsic matrix support. Those relevant to measurement:
+The iPhone's back camera exposes **70 formats**. Every one was applied in turn, with video stabilization explicitly disabled, and its connection queried for intrinsic matrix support. Those relevant to measurement:
 
 | Resolution | Max fps | Intrinsics | fx from FOV |
 |---|---|---|---|
@@ -196,7 +198,7 @@ Frame counts corroborate the rates in both cases, so the format survives recordi
 
 Clips are deleted from the clip list, by swiping a row or via the Edit button. Nothing else prunes the directory, and 4K/120 runs roughly 6 MB per second, so this matters.
 
-`NSPhotoLibraryAddUsageDescription` remains in the target's Info settings but is unused and inert, since the app no longer requests Photos access.
+**The app declares no Photos usage descriptions.** `NSPhotoLibraryAddUsageDescription` was removed once Photos was abandoned — it was unreachable, and its text claimed the app saved kicks to Photos, which is the opposite of what the app does. If Photos export is ever brought back into scope, the key comes back with it.
 
 ### Getting clips off the device
 
@@ -234,6 +236,10 @@ All verified on the device:
 
 **Seeks are coalesced: at most one in flight, and only the newest target is kept.** A drag emits values far faster than AVPlayer can service them, and queueing every one makes the picture fall progressively behind the finger. Intermediate positions are dropped on purpose.
 
+**Review happens on the iPad Air 11".** A 6" phone is too small to show a kicker their own technique. The app is universal (`TARGETED_DEVICE_FAMILY = "1,2"`) and needed no port and no layout changes — SwiftUI adapted the clip browser sheet by itself. Clips reach the iPad through the AirDrop path described under *Getting clips off the device*.
+
+Playback work can be validated in the iOS Simulator; capture work cannot, because the Simulator has no camera and exposes no real capture formats.
+
 ### Standing constraints from the free-tier account
 
 - Builds signed under a Personal Team **stop launching after 7 days** and must be re-run from Xcode. Expected behavior, not a bug.
@@ -267,8 +273,6 @@ This is the largest remaining unknown in the project. Nothing about velocity, la
 **Film several kicks with the app, and where possible film the same kick in both capture configurations** — that comparison is what settles the open question below.
 
 **File sharing also unblocks tracker development on the Mac.** Clips can now be pulled from *On My iPhone → GoalKick → Clips* onto the Mac, so tracking code can be developed and debugged against real footage with real timestamps rather than against the device. Expect to want this from the first day of Step 3.
-
-Note that capture work cannot be validated in the iOS Simulator, which has no camera and exposes no real capture formats. Playback work can be.
 
 ## Open Questions
 
