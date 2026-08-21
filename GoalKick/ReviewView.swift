@@ -379,6 +379,12 @@ struct ClipListView: View {
                                     Text("\(clip.created.formatted(date: .abbreviated, time: .standard))  ·  \(clip.sizeDescription)")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+                                    // A clip with no ball size cannot be
+                                    // measured, so it is called out rather
+                                    // than left looking like the others.
+                                    Text(clip.ballDescription)
+                                        .font(.caption)
+                                        .foregroundStyle(clip.ballSize == nil ? .orange : .secondary)
                                 }
                             }
                         }

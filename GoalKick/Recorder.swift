@@ -63,6 +63,132 @@ enum CaptureConfig: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+// MARK: - Ball size
+
+/// The ball's physical diameter is the only real-world measurement the app is
+/// given. Together with the focal length in pixels it is what turns an apparent
+/// diameter on screen into a distance in metres — so a clip recorded without it
+/// cannot be measured at all, at any later date.
+///
+/// That is why it is recorded per clip at capture time rather than kept as a
+/// global setting: a setting describes the app's state now, not the state when
+/// a particular clip was filmed.
+enum BallSize: String, CaseIterable, Identifiable, Sendable {
+    case size3 = "Size 3"
+    case size4 = "Size 4"
+    case size5 = "Size 5"
+
+    // As with CaptureConfig, these are pure value computations read from the
+    // capture queue, so they are explicitly nonisolated to opt out of the
+    // project's MainActor default isolation.
+
+    nonisolated var id: String { rawValue }
+
+    /// Diameter in millimetres, taken from the midpoint of each size's official
+    /// circumference range: d = circumference / π.
+    ///
+    /// - Size 3: 58–61 cm → 59.5 cm
+    /// - Size 4: 63.5–66 cm → 64.75 cm
+    /// - Size 5: 68–70 cm → 69.0 cm
+    ///
+    /// These are nominal. A ball's real diameter varies with inflation
+    /// pressure and wear, which puts a floor on achievable accuracy that no
+    /// amount of tracking precision can lift.
+    nonisolated var diameterMillimetres: Double {
+        switch self {
+        case .size3: return 189.4
+        case .size4: return 206.1
+        case .size5: return 219.6
+        }
+    }
+
+    /// The form the metric maths actually consumes.
+    nonisolated var diameterMetres: Double {
+        diameterMillimetres / 1000
+    }
+
+    /// Filename-safe token, so a clip's ball size is visible on disk and in
+    /// the Files app without opening the video.
+    nonisolated var fileToken: String {
+        switch self {
+        case .size3: return "sz3"
+        case .size4: return "sz4"
+        case .size5: return "sz5"
+        }
+    }
+
+    nonisolated static func from(fileToken token: String) -> BallSize? {
+        allCases.first { $0.fileToken == token }
+    }
+
+    /// Recovers the ball size from a clip filename written by `newClipURL`.
+    ///
+    /// Any component is matched rather than a fixed position, so a clip
+    /// recorded before ball size existed simply yields nil instead of
+    /// mis-parsing, and adding further tokens later cannot break this.
+    nonisolated static func from(filename: String) -> BallSize? {
+        let stem = (filename as NSString).deletingPathExtension
+        for component in stem.split(separator: "-") {
+            if let match = from(fileToken: String(component)) {
+                return match
+            }
+        }
+        return nil
+    }
+}
+
+// MARK: - Clip metadata
+
+/// Identifiers for the movie-level metadata written into each recording.
+///
+/// The filename carries the ball size too, but this is the authoritative copy:
+/// the two can only disagree if a file is renamed, and renaming damages the
+/// filename while leaving what is inside the file untouched.
+///
+/// `mdta` is the QuickTime metadata keyspace, which permits reverse-DNS keys of
+/// our own. It is the only keyspace that does, and .mov files support it.
+enum ClipMetadata {
+    static let ballSizeIdentifier =
+        AVMetadataIdentifier("mdta/com.rocket.GoalKick.ballSize")
+    static let ballDiameterIdentifier =
+        AVMetadataIdentifier("mdta/com.rocket.GoalKick.ballDiameterMillimetres")
+
+    /// Movie-level metadata describing the ball, to be handed to the movie
+    /// output *before* recording starts. Set afterwards it has no effect.
+    ///
+    /// The diameter is written alongside the size name so that analysis code
+    /// never has to know what "Size 4" means in millimetres — the number it
+    /// needs is in the file.
+    nonisolated static func items(for ballSize: BallSize) -> [AVMetadataItem] {
+        let name = AVMutableMetadataItem()
+        name.identifier = ballSizeIdentifier
+        name.dataType = kCMMetadataBaseDataType_UTF8 as String
+        name.value = ballSize.rawValue as NSString
+
+        let diameter = AVMutableMetadataItem()
+        diameter.identifier = ballDiameterIdentifier
+        diameter.dataType = kCMMetadataBaseDataType_UTF8 as String
+        diameter.value = String(ballSize.diameterMillimetres) as NSString
+
+        return [name, diameter]
+    }
+
+    /// Reads the ball diameter back out of a recorded clip.
+    ///
+    /// Async because loading metadata means reading the file. This is the call
+    /// analysis should use; the filename token is for display and for quick
+    /// inspection from outside the app.
+    nonisolated static func ballDiameterMillimetres(in url: URL) async -> Double? {
+        let asset = AVURLAsset(url: url)
+        guard let metadata = try? await asset.load(.metadata) else { return nil }
+        let matches = AVMetadataItem.metadataItems(from: metadata,
+                                                   filteredByIdentifier: ballDiameterIdentifier)
+        guard let item = matches.first,
+              let text = try? await item.load(.stringValue) else { return nil }
+        return Double(text)
+    }
+}
+
 // MARK: - Local clip storage
 
 /// A recording held in the app's own Documents directory.
@@ -70,12 +196,20 @@ struct Clip: Identifiable, Hashable {
     let url: URL
     let created: Date
     let sizeBytes: Int64
+    /// Parsed from the filename, so the clip list stays synchronous. Nil for
+    /// clips recorded before ball size was captured — those are not
+    /// measurable, and showing that plainly is the point.
+    let ballSize: BallSize?
 
     var id: URL { url }
     var name: String { url.lastPathComponent }
 
     var sizeDescription: String {
         ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
+    }
+
+    var ballDescription: String {
+        ballSize?.rawValue ?? "Ball size unknown"
     }
 }
 
@@ -97,12 +231,12 @@ enum ClipStore {
         return clips
     }
 
-    static func newClipURL(for config: CaptureConfig) -> URL {
+    static func newClipURL(for config: CaptureConfig, ballSize: BallSize) -> URL {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd-HHmmss"
         let stamp = formatter.string(from: Date())
         return directory
-            .appendingPathComponent("GoalKick-\(stamp)-\(config.fileToken)")
+            .appendingPathComponent("GoalKick-\(stamp)-\(config.fileToken)-\(ballSize.fileToken)")
             .appendingPathExtension("mov")
     }
 
@@ -118,7 +252,8 @@ enum ClipStore {
                 let values = try? url.resourceValues(forKeys: Set(keys))
                 return Clip(url: url,
                             created: values?.creationDate ?? .distantPast,
-                            sizeBytes: Int64(values?.fileSize ?? 0))
+                            sizeBytes: Int64(values?.fileSize ?? 0),
+                            ballSize: BallSize.from(filename: url.lastPathComponent))
             }
             .sorted { $0.created > $1.created }
     }
@@ -143,6 +278,8 @@ final class Recorder: NSObject, ObservableObject, @unchecked Sendable {
     /// The session queue's own copy of the active configuration. Never read
     /// `config` (main actor state) from the capture pipeline.
     nonisolated(unsafe) private var activeConfig: CaptureConfig = .highSpeed1080p
+    /// Likewise for the ball size. Same rule, same reason.
+    nonisolated(unsafe) private var activeBallSize: BallSize = .size4
 
     /// Tracks how the device is held so recordings come out the right way up.
     /// Without this the capture connection stays at its portrait default no
@@ -155,6 +292,7 @@ final class Recorder: NSObject, ObservableObject, @unchecked Sendable {
 
     // Main actor state, for the UI only.
     @Published var config: CaptureConfig = .highSpeed1080p
+    @Published var ballSize: BallSize = .size4
     @Published var status: String = "Starting…"
     @Published var detail: String = ""
     /// What the recorded file actually turned out to contain, read back
@@ -281,6 +419,18 @@ final class Recorder: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// Ball size changes nothing about the capture session — it is written to
+    /// the filename and the movie metadata when recording starts — so unlike
+    /// `select(_:)` this only moves the value onto the capture queue.
+    nonisolated func select(ballSize newBallSize: BallSize) {
+        DispatchQueue.main.async {
+            self.ballSize = newBallSize
+        }
+        sessionQueue.async {
+            self.activeBallSize = newBallSize
+        }
+    }
+
     nonisolated private func applyFormat(_ requested: CaptureConfig) {
         guard let device else { return }
         activeConfig = requested
@@ -339,9 +489,20 @@ final class Recorder: NSObject, ObservableObject, @unchecked Sendable {
             if self.movieOutput.isRecording {
                 self.movieOutput.stopRecording()
             } else {
+                // The ball size is written twice, on purpose. The metadata is
+                // authoritative; the filename token mirrors it so the size is
+                // legible in the Files app and to analysis code on the Mac
+                // without opening the video. Both travel with the file over
+                // AirDrop, which a sidecar file would not.
+                //
+                // Metadata must be assigned before startRecording — set after,
+                // it is silently ignored.
+                self.movieOutput.metadata = ClipMetadata.items(for: self.activeBallSize)
+
                 // Recorded straight into the app's own storage. This file is
                 // the only copy, and the only one with true frame timing.
-                let url = ClipStore.newClipURL(for: self.activeConfig)
+                let url = ClipStore.newClipURL(for: self.activeConfig,
+                                               ballSize: self.activeBallSize)
                 self.movieOutput.startRecording(to: url, recordingDelegate: self)
             }
         }
@@ -419,8 +580,19 @@ extension Recorder: AVCaptureFileOutputRecordingDelegate {
             let seconds = CMTimeGetSeconds(duration)
             let frames = Int((Double(rate) * seconds).rounded())
 
-            return String(format: "FILE: %.0f × %.0f · %.1f fps · %.2f s · ~%d frames",
-                          size.width, size.height, rate, seconds, frames)
+            // Read the ball back out of the finished file rather than trusting
+            // that the write worked. A clip whose ball size failed to record
+            // is not measurable, and that should be visible now, not at
+            // analysis time weeks later.
+            let ball: String
+            if let diameter = await ClipMetadata.ballDiameterMillimetres(in: url) {
+                ball = String(format: " · ball %.1f mm", diameter)
+            } else {
+                ball = " · BALL SIZE MISSING"
+            }
+
+            return String(format: "FILE: %.0f × %.0f · %.1f fps · %.2f s · ~%d frames%@",
+                          size.width, size.height, rate, seconds, frames, ball)
         } catch {
             return "FILE: verify failed — \(error.localizedDescription)"
         }

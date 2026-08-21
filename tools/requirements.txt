@@ -1,0 +1,20 @@
+# Tooling for the ball tracking spike. Mac-side only.
+#
+# This is deliberately separate from the app, which has no third-party
+# dependencies and is not affected by anything here. These files live outside
+# GoalKick/ so Xcode's synchronized folders do not sweep them into the target.
+#
+# If pip reports no matching distribution, the usual cause is that the Python
+# interpreter is newer than the available opencv-python wheels. Build the venv
+# against 3.12 or 3.13 rather than waiting for a wheel.
+
+opencv-python>=4.10
+numpy>=1.26
+
+# Pre-trained object detection. COCO's "sports ball" class finds footballs of
+# any colour without training data, which a colour threshold cannot do.
+#
+# This pulls in PyTorch: a 2-3 GB download, and the dependency most likely to
+# lack a wheel for a very new Python. If pip cannot resolve it, that is the
+# signal to build the venv on 3.12 rather than to wait.
+ultralytics>=8.3

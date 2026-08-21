@@ -19,6 +19,8 @@ struct RecordView: View {
             VStack {
                 configPicker
 
+                ballSizePicker
+
                 statusPanel
 
                 Spacer()
@@ -44,6 +46,31 @@ struct RecordView: View {
         }
         .pickerStyle(.segmented)
         .disabled(recorder.isRecording || !recorder.isReady)
+    }
+
+    /// Which ball is being kicked. This is the only real-world measurement the
+    /// app is given, and it is recorded into the clip, so it has to be right
+    /// before the kick rather than remembered afterwards.
+    private var ballSizePicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Ball")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.75))
+
+            Picker("Ball size", selection: Binding(
+                get: { recorder.ballSize },
+                set: { recorder.select(ballSize: $0) }
+            )) {
+                ForEach(BallSize.allCases) { size in
+                    Text(size.rawValue).tag(size)
+                }
+            }
+            .pickerStyle(.segmented)
+            // Locked while recording for the same reason the configuration is:
+            // the value is baked into the file at the moment recording starts,
+            // so letting it change mid-clip would only mislead.
+            .disabled(recorder.isRecording || !recorder.isReady)
+        }
     }
 
     private var statusPanel: some View {

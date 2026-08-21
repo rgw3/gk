@@ -23,3 +23,20 @@ build/
 # Playgrounds
 timeline.xctimeline
 playground.xcworkspace
+
+# Mac-side tooling for the tracking spike. The scripts are tracked; the
+# environment and their output are not.
+tools/.venv/
+tools/frames/
+
+# Pre-trained model weights. Ultralytics downloads these on first run, so
+# they are reproducible rather than source.
+*.pt
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Footage. Clips are large — 4K/120 runs roughly 6 MB per second — and the
+# originals live on the phone. Nothing here is a source of truth.
+*.mov

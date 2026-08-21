@@ -72,6 +72,7 @@ The coach should be able to do the following with the video:
   - 1/2
   - 1/4
 - Step through the video frame by frame using advance and reverse buttons
+- Pinch to zoom into the picture, and pan around while zoomed
 
 **Clips are stored inside the app, in its own Documents directory. Nothing is written to Photos.** What is stored is the raw capture — not a version with tracking or metrics rendered onto it. Exporting to Photos is out of scope for now.
 
@@ -88,7 +89,8 @@ The app is built as a **native iOS app in Swift**. This is decided. The requirem
 | Language | Swift 5 language mode (`SWIFT_VERSION = 5.0`), with `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` — the Xcode 26 default. Deliberately **not** Swift 6 strict concurrency. See the note below. |
 | UI | SwiftUI, with `UIViewRepresentable` wrappers for camera preview and `AVPlayerLayer` |
 | Capture | AVFoundation — `AVCaptureSession`, high-speed format selection, video stabilization forced off (it warps geometry and would corrupt measurement) |
-| Ball tracking | Vision (`VNTrackObjectRequest`) first; a Core ML detector if Vision's tracker proves insufficient |
+| Ball tracking | **A pre-trained COCO object detector, not Vision's tracker.** `yolo11n` finds the ball through its "sports ball" class with no training data and no colour assumptions, proven on real footage at 100% of frames. `VNTrackObjectRequest` was never tried: a tracker follows an appearance you hand it, so it needs seeding and inherits whatever colour that seed had, while a detector generalises across ball colours for free. In the app this becomes the model exported to Core ML and run through `VNCoreMLRequest`. |
+| Camera-shake correction | Frame-to-frame background registration. OpenCV optical flow on the Mac; `VNTranslationalImageRegistrationRequest` / `VNHomographicImageRegistrationRequest` in the app |
 | Numerics | Accelerate / vImage; Metal only if profiling demands it |
 | Playback | `AVPlayer`, driven by setting `rate` directly for slow and reverse playback, and `AVPlayerItem.step(byCount:)` for frame stepping |
 | Camera attitude | CoreMotion, to correct launch angle for camera tilt |
@@ -100,19 +102,50 @@ The app is built as a **native iOS app in Swift**. This is decided. The requirem
 - **Intrinsic matrix** — delivered per frame, gives true focal length under current focus plus the optical center. Better, but unavailable at 240 fps on the iPhone, and delivered only to a live capture session rather than stored in the recorded file.
 - **Field of view** — `AVCaptureDevice.Format.videoFieldOfView` is published for every format, including the 240 fps ones. Focal length follows as `fx = (imageWidth / 2) / tan(fieldOfView / 2)`. Nominal rather than measured, but a goal kick is filmed at 20–40 m where the lens is effectively at infinity focus, so the nominal value is accurate.
 
-**Known technical risk:** motion blur on a fast-moving ball at high frame rates may defeat Vision's built-in tracker and force a trained Core ML detector. The stack above supports either path.
+**Known technical risk, partially measured:** motion blur on a fast-moving ball may defeat Vision's built-in tracker and force a trained Core ML detector. First footage (2026-08-21, bright sun, ball at ~13 m/s) shows **no meaningful blur** — panel detail is legible on a ball ~70 px across at 240 fps. This retires the risk at that speed and in that light only. A real goal kick at ~30 m/s smears roughly 2.3× further per exposure, and overcast light lengthens exposure further, so the risk stands for the footage that actually matters.
 
 **On Swift 6:** the decision to stay in Swift 5 mode stands, and was reconsidered deliberately after capture was working rather than allowed to lapse. Strict concurrency turns data-race issues into hard compile errors, and the next phase — passing `CMSampleBuffer` and `CVPixelBuffer` to Vision — is the worst area for that friction, since neither type is `Sendable` and the annotations are Apple's to fix, not ours. `SWIFT_VERSION` is a single build setting, so migrating later costs the same work on a more settled design. Revisit once tracking works.
+
+## Measurement Approach
+
+**Only launch conditions are measured. Everything else is computed.**
+
+Deliverable 1 asks for velocity, launch angle, and *theoretical* carry distance and max height. Theoretical means derived from launch conditions rather than observed, so the ball never has to be filmed landing. Velocity and launch angle are fully determined within the first fraction of a second after contact; carry and apex follow from the flight model.
+
+This resolves what would otherwise be an impossible framing problem. Covering a 40 m flight requires standing ~27 m back, where a Size 4 ball is under 10 px wide at 1080p (see *Pixels on the ball*). Filming only the launch allows standing 5–12 m away, where the ball is 26–52 px and the diameter estimate is sound.
+
+It also means footage that ends early — a ball struck into a close net — still yields all four metrics.
+
+**Filming guardrails.** These are constraints on the coach, not on the software, and they are what make the measurement tractable:
+
+| Guardrail | Why |
+|---|---|
+| Held steady, no deliberate pan | Handheld is the expected case — coaches will not carry tripods, and requiring one would make the app unusable. Over a ~0.15 s measurement window a steady hand drifts only a few pixels, worth roughly 1–3% on speed, and residual shake is removed in analysis by registering each frame against the background. **Panning is different in kind** and must be avoided: following the ball keeps it near frame centre while the whole background sweeps past, a far larger correction. Let the ball leave the frame instead. A tripod or any rest improves accuracy and should be used when available, but is not required. |
+| 5–12 m from the ball | Sets a floor on pixels across the ball: ~52 px at 5 m, ~26 px at 10 m at 1080p. Accuracy becomes a known quantity rather than a lottery. |
+| Within ±15° of perpendicular to the kick | Off-axis foreshortening under-reads velocity by roughly `cos φ` — 3.4% at 15°, 13% at 30°. |
+| Ball stationary and in frame before the kick | The most accurate diameter measurement available is the ball at rest: sharp, unblurred, measurable over many frames. Scale is fixed there, once, rather than fought for mid-flight. It also makes contact detectable automatically — contact is the first frame the ball moves. |
+
+None of this is built. The app offers no framing guidance and performs no compliance check.
+
+**On-device constraints.** Analysis runs on an iPhone or iPad, after capture rather than live, so throughput is not critical — but two things are:
+
+- **The detector must export to Core ML and fit on the Neural Engine.** The Mac-side spike is restricted to `yolo11n` (~6 MB) and `yolo11s` (~19 MB) for that reason. Proving the concept with a model that cannot ship would prove nothing.
+- **Camera-shake compensation ports cleanly.** Frame-to-frame registration against the background has native equivalents in `VNTranslationalImageRegistrationRequest` and `VNHomographicImageRegistrationRequest`, so this technique survives the move to the app with no third-party dependency. It complements the decision to disable hardware video stabilisation at capture: the camera's own stabiliser applies a *non-rigid* warp that corrupts geometry, while a *rigid* registration applied in analysis removes shake without distorting. Off in the camera, corrected in software.
+- **Diameter refinement was dropped rather than ported.** An earlier spike refined ball diameter with OpenCV's `HoughCircles`, which has no Apple equivalent. Measured against real footage it inflated diameter by ~45% while the raw detector box held steady to a few pixels, so it was removed. Nothing in the current pipeline depends on an OpenCV routine without a Vision or Accelerate counterpart.
 
 ## Current State
 
 ### What does NOT exist yet
 
-**There is no measurement code of any kind.** No ball detection, no tracking, no velocity, no launch angle, no carry distance, no max height. Deliverable 1's actual metrics are entirely unstarted, and their feasibility has not been demonstrated.
+**There is no measurement code in the app.** Detection, tracking and metrics exist only as Python on the Mac (see *Analysis pipeline*). The iOS app still captures, stores and reviews; it computes nothing. Nothing has been ported, and no Core ML model has been exported.
 
-What exists is everything *around* the measurement: a way to capture footage good enough to measure from, a way to move it off the device without corrupting its timing, and a way to look at it frame by frame on a screen big enough to share with the kicker. All verified on hardware. None of it computes anything.
+**The metrics are not yet trustworthy even on the Mac.** The pipeline runs end to end and produces plausible-looking numbers, but its own gravity self-check fails — see *The gravity discrepancy* under Open Questions. Until that is understood, no figure it produces should be shown to anyone.
 
-**Two inputs Deliverable 1 depends on are also missing.** There is no way to tell the app the ball's size, and no decision on the flight model behind carry distance and max height. Both are listed under Open Questions.
+**Pinch to zoom is unbuilt**, and is part of Deliverable 1.
+
+**No filming guardrail is enforced or checked.** The app gives the coach no framing guidance and does not verify afterwards whether the shot was square, steady, or at a sensible distance — despite those being what makes the measurement work at all.
+
+**The test targets remain empty.** No test has been written for either the Swift app or the Python tools.
 
 ### What is done
 
@@ -124,6 +157,10 @@ Each of these is verified on hardware, not merely written. Details are in the se
 | **Video review screen** | Every playback control Deliverable 1 asks for, plus 1/8 speed, restart, scrubbing, section looping, and reverse playback beyond the requirement. |
 | **Clip transfer off the device** | File sharing exposes `Documents/` in the Files app, and AirDrop moves clips to the iPad or the Mac with frame timing intact. |
 | **iPad as the review device** | No port was needed. The app was already universal and the review screen required no layout changes. |
+| **Ball size capture** | A `BallSize` picker on the Record screen, written into every clip twice: as a filename token and as `mdta` metadata inside the movie. Both survive AirDrop, which a sidecar file would not. **Written but not yet verified on hardware.** |
+| **First footage** | Ten clips, 2026-08-21. Five at 1080p/240, five at 4K/120. Documented under *Open Questions → How should a goal kick be filmed?* |
+| **Step 3 — ball tracking** | Done, on the Mac. A stock `yolo11n` finds the ball in 100% of frames across the flight, with continuity gating to reject the cones it grabs once the ball reaches the net. Output is the per-frame table Step 3 asked for. |
+| **Step 4 — metrics** | Written, on the Mac. Produces speed, launch angle, carry and apex, with both flight models side by side. **The numbers do not yet pass their own self-check.** |
 
 ### Environment
 
@@ -150,14 +187,35 @@ Build, sign, install, and launch are confirmed working on both devices. Getting 
 | File | Contents |
 |---|---|
 | `ContentView.swift` | Tab bar container only. Two tabs: **Record** and **Review**. |
-| `RecordView.swift` | Capture screen: live preview, configuration picker, record button |
-| `Recorder.swift` | `CaptureConfig`, `ClipStore`, capture session, format selection, orientation, recording, file verification |
+| `RecordView.swift` | Capture screen: live preview, configuration picker, ball size picker, record button |
+| `Recorder.swift` | `CaptureConfig`, `BallSize`, `ClipMetadata`, `ClipStore`, capture session, format selection, orientation, recording, file verification |
 | `ReviewView.swift` | Playback controller, transport, scrubbing, looping, frame stepping, clip browser |
 | `Info.plist` | Only the Info keys the `INFOPLIST_KEY_*` allowlist cannot express — currently `UIFileSharingEnabled` alone. Everything else is still generated by `GENERATE_INFOPLIST_FILE` and merged at build time. Do not duplicate generated keys here. |
 
 **The project uses Xcode 16+ synchronized folders** (`PBXFileSystemSynchronizedRootGroup`), so files added to `GoalKick/` join the target automatically with no project-file surgery. `Info.plist` is the one deliberate exception: it carries a `membershipExceptions` entry excluding it from the target, because otherwise the folder copies it into the bundle as a resource while `ProcessInfoPlistFile` generates one at the same path, and the build fails with **"Multiple commands produce … GoalKick.app/Info"**. That exception is what Xcode itself writes when target membership is unticked in the File Inspector.
 
 **App icon:** a placeholder in `Assets.xcassets/AppIcon.appiconset/`, cropped from an illustration to the ball. Only the Any Appearance slot is filled; iOS derives dark and tinted. To be revisited.
+
+### Analysis pipeline (Mac-side, Python)
+
+Measurement is being developed in Python on the Mac before anything is ported to Swift. The reason is deliberate: the feasibility question — can the ball be found at all — is separable from learning Swift, and iterating on the Mac takes seconds where a device rebuild takes a minute and expires after 7 days.
+
+**These files live at the repo root, outside `GoalKick/`**, because the project uses synchronized folders and anything inside `GoalKick/` is swept into the app target automatically.
+
+| File | Contents |
+|---|---|
+| `tools/extract_frames.py` | `probe` (verify real frame timing against nominal), `sheet` (contact sheet to locate the kick), `extract` (frames as PNGs) |
+| `tools/detect_ball.py` | YOLO detection, background registration, continuity gating; writes the per-frame CSV |
+| `tools/compute_metrics.py` | Reads that CSV; 3D reconstruction, trajectory fit, both flight models |
+| `tools/requirements.txt` | `opencv-python`, `numpy`, `ultralytics` |
+
+**The CSV is the interface between detection and physics**, so the arithmetic can be re-run in a second without paying for the model again.
+
+**Environment:** Python 3.14 with `tools/.venv`. PyTorch and OpenCV wheels resolved on 3.14 without needing an older interpreter.
+
+**Nothing here ships.** It is a spike whose findings port to Vision, Core ML and Accelerate. Two constraints keep it portable: the detector is restricted to `yolo11n` and `yolo11s` so it will fit on the Neural Engine, and no technique is used that lacks an Apple equivalent — which is why an OpenCV `HoughCircles` diameter refinement was removed rather than kept.
+
+**Clips reach the Mac over the cable, not AirDrop.** Finder → the iPhone under *Locations* → the **Files** tab → *GoalKick → Clips* → drag out. This is byte-for-byte and needs no device discovery; AirDrop failed to find the Mac in practice.
 
 ### Camera capability, measured on the iPhone
 
@@ -246,6 +304,8 @@ All verified on the device:
 - Continuous reverse playback at the selected speed. `canPlayReverse` is true for these clips, so the encoding supports backwards decode and no codec change is needed.
 - Controls overlay the video and auto-hide after 3 seconds, so the picture fills the screen in both orientations. They never auto-hide when no clip is loaded, or the "Choose clip" button would vanish with no way back.
 
+**Pinch to zoom is part of Deliverable 1 and is not built.** The review screen offers no zoom and no pan. Its value is in combination with frame stepping: zooming to the ball and the plant foot and then stepping frame by frame is how a coach shows a kicker what their technique actually did — at full-frame scale on a phone, the ball is too small for that to land. Zoom must persist across frame stepping, speed changes and scrubbing rather than resetting, or the gesture becomes useless for the thing it is for. Two known design points: the gesture has to coexist with the controls overlay that auto-hides after 3 seconds, and zoom affects review only — measurement reads the stored pixels, never the display transform.
+
 **1/8 is the rate at which a 240 fps clip shows every frame.** 240 ÷ 8 = 30 frames displayed per second. At 1× the display physically cannot show all 240, so frames are dropped and the reviewer is not seeing everything that was recorded. The equivalent for 4K/120 is 1/4. Slower than that repeats frames rather than revealing new ones.
 
 **Seeking uses two modes, deliberately.** While the scrubber is dragged, seeks use infinite tolerance — "any nearby keyframe will do" — the cheapest seek available. On release, a zero-tolerance seek snaps to the exact frame. Restart does the same. One mode alone cannot give both a responsive drag and a frame-accurate resting position.
@@ -268,19 +328,21 @@ Playback work can be validated in the iOS Simulator; capture work cannot, becaus
 
 Completed work is recorded under *Current State → What is done*. This section holds only what has not been done.
 
-**Step 3 — Ball tracking spike.** Detect and track the ball across frames of a real goal kick, and report its pixel position and apparent diameter per frame. Start with Vision's `VNTrackObjectRequest`; fall back to a trained Core ML detector if motion blur defeats it.
+Steps 3 and 4 are written and running on the Mac. What follows is what remains.
 
-Done when a real goal kick clip yields a per-frame table of ball centre and diameter in pixels, covering the flight from contact to apex or beyond.
+**Step 5 — Resolve the gravity discrepancy.** This blocks everything else and is described in full under *Open Questions*. The pipeline's own self-check says the reconstructed trajectory is not a ballistic one, so no metric it produces can be believed yet. Immediate action: run the remaining nine clips, especially the 4K ones where the ball is twice the size and depth noise roughly halves, and see whether the deficit is specific to one clip or systematic in the method.
 
-This is the largest remaining unknown in the project. Nothing about velocity, launch angle, or carry distance can be computed until it works, and it is the one part whose feasibility has not been demonstrated at all.
+Done when a real kick reconstructs with fitted gravity near 9.81 m/s² without being told what gravity is.
 
-**Blocked on footage, and on nothing else.** Every supporting piece — capture, storage, review, and now a way to get clips off the device — is done and verified. Filming is the single remaining prerequisite.
+**Step 6 — Verify the ball size selector on hardware.** It is written but has never been run. Record a clip and confirm the status panel reads `· ball 206.1 mm` rather than `BALL SIZE MISSING` — that is the metadata round-trip, and it is the half of the two-copy scheme that cannot be checked by looking at filenames in Files.
 
-**Film several kicks with the app, and where possible film the same kick in both capture configurations** — that comparison is what settles the open question below.
+**Step 7 — Port the pipeline to the app.** Export the detector to Core ML, drive it through `VNCoreMLRequest`, replace OpenCV registration with the Vision equivalents, and reimplement the trajectory fit in Swift. Not to be started before Step 5 succeeds; porting a pipeline that produces wrong numbers would only make the wrong numbers harder to debug.
 
-**File sharing also unblocks tracker development on the Mac.** Clips can now be pulled from *On My iPhone → GoalKick → Clips* onto the Mac, so tracking code can be developed and debugged against real footage with real timestamps rather than against the device. Expect to want this from the first day of Step 3.
+**Step 8 — Pinch to zoom in Review.** Part of Deliverable 1, unbuilt. See *Current State → Review*.
 
-**Step 4 — Metrics.** Turn the per-frame table from Step 3 into velocity, launch angle, carry distance, and max height. Not specified yet; it depends on the flight model and the ball-size input, both of which are open questions below.
+**Step 9 — Filming guardrails in the app.** Framing guidance before the kick, and a compliance check afterwards. The check is now cheap and concrete: the ball's diameter trend across the flight measures how far off perpendicular the shot was, and the background registration already measures camera movement. Both numbers exist; nothing surfaces them to the coach.
+
+**Also outstanding: film properly square footage.** The first ten clips are short-range strikes into a net from ~4 m at ~11° off perpendicular. They are excellent for developing the tracker and poor for validating the physics.
 
 ### Optional, not scheduled
 
@@ -295,27 +357,98 @@ Two clip-transfer refinements are **available but unbuilt**, since the manual pa
 
 **Both configurations are currently calibrated from field of view, and 4K/120's intrinsic matrix is not in fact an advantage today.** The camera reports intrinsics only to a live capture session; they are **not stored in the recorded movie file**. Deliverable 1 analyses a saved video, so intrinsics are unavailable at analysis time unless they are captured alongside the recording and written to a sidecar — which has not been built. Until it is, the choice is purely samples-and-blur versus pixels-on-ball.
 
-**Settle this by filming the same goal kick both ways once tracking exists**, not from first principles. The recorder offers both configurations so that comparison is possible.
+**This cannot be settled by filming the same kick both ways.** One phone runs one format at a time, so a single kick cannot be recorded at 1080p/240 and 4K/120 simultaneously. Comparing configurations means comparing sets of kicks in aggregate, or using two devices. The first session produced five of each, which are different kicks.
+
+**The pipeline now measures the thing that decides this.** `compute_metrics.py` reports range scatter about the fitted trend and fitted gravity, both of which degrade with depth noise. Running the same analysis across the 1080p and 4K sets answers the question empirically rather than by argument.
+
+**Pixels on the ball, and why filming distance dominates accuracy**
+
+Range is recovered from apparent diameter: `Z = fx × D / d`. Run backwards, that gives the ball's pixel width at a given range for a Size 4 ball (D = 206 mm):
+
+| Range | 1080p (fx ≈ 1260) | 4K (fx ≈ 2520) |
+|---|---|---|
+| 3.7 m *(first footage)* | 70 px | 140 px |
+| 10 m | 26 px | 52 px |
+| 20 m | 13 px | 26 px |
+| 27 m | 9.6 px | 19 px |
+| 40 m | 6.5 px | 13 px |
+
+Relative range error tracks relative diameter error one for one. Half a pixel of error on a 70 px ball is 0.7%; the same half pixel on a 9.6 px ball is 5%, and it propagates into every metric.
+
+**The geometry traps you.** With a 74.6° field of view, framing a 40 m flight means standing about 26–27 m back. At that range the ball is under 10 px at 1080p. Whole flight in frame and a well-resolved ball are in direct conflict, and no technique resolves it — only a longer lens or a second camera would.
+
+**This is evidence for 4K/120** in the open question above. At realistic goal-kick range it roughly doubles the pixels across the ball, and the diameter estimate is the weakest link in the chain.
+
+**A constant-range assumption was tried and abandoned.** The reasoning was that for a side-on shot the ball stays at roughly constant range, so diameter could be averaged once to fix the scale and the flight treated as flat. Measured against real footage that failed silently and badly. The ball was travelling ~11–15° toward the camera, its apparent size grew across the flight, and the steadily inflating scale cancelled gravity's curvature almost exactly — the fit reported gravity as **−0.16 m/s²**, a straight line through what should have been a 48-pixel sag.
+
+**Depth is now computed per frame**, with the range trend smoothed by a straight-line fit before use: over a fifth of a second range changes almost linearly, while measured diameter wobbles a few percent frame to frame, and because both X and Y are multiplied by range that wobble would otherwise contaminate every axis. Moving to 3D raised fitted gravity from −0.16 to 3.49 m/s², which confirmed the diagnosis without resolving the problem.
 
 **What flight model produces carry distance and max height — drag-free, or with air resistance?**
 
-Undecided, and the two answers differ enormously. A size 4 or 5 ball leaving the foot at ~30 m/s is deep in a drag-dominated regime; a vacuum parabola can overestimate carry by roughly a factor of two. This is not a refinement, it is the difference between a number that means something and one that does not.
+**Decided: both, computed and shown side by side.** The gap between them is itself the honest answer — it shows how much of the figure is physics and how much is assumption. Implemented in `compute_metrics.py`: a closed-form parabola, and RK4 integration with quadratic drag at Cd 0.25, mass by ball size, air density 1.225 kg/m³. On the first footage at ~13 m/s the two differ by about 12% in carry; at goal-kick speeds the gap widens sharply.
+
+**Two limitations are recorded in the code and must reach the UI.** The drag coefficient of a football is not constant — it falls through the drag crisis around 10–15 m/s and varies with panelling — and a single value is used. And spin is ignored entirely, so there is no Magnus force: a ball struck with backspin carries further than either model predicts.
+
+The reasoning that led here, kept because it still applies:
+
+The two answers differ enormously. A size 4 or 5 ball leaving the foot at ~30 m/s is deep in a drag-dominated regime; a vacuum parabola can overestimate carry by roughly a factor of two. This is not a refinement, it is the difference between a number that means something and one that does not.
 
 - **Drag-free parabola** — closed form, no parameters beyond launch velocity and angle, and defensible if the figure is presented explicitly as a theoretical maximum rather than a prediction of where the ball would land.
 - **With drag** — needs a drag coefficient and a ball mass, and realistically numerical integration rather than a closed form. Closer to reality, but introduces constants the app cannot measure and must assume.
 
 Deliverable 1's wording, "theoretical carry distance," leans toward the first. That has never been confirmed as a decision, and **whichever is chosen must be stated in the UI**, or the coach will read a theoretical maximum as a real distance.
 
-**How does the app learn the ball's size?**
+Because carry distance and max height are computed from launch conditions rather than measured (see *Measurement Approach*), the flight model is not a refinement of those metrics — it *is* those metrics. That is why showing both was chosen over picking one.
 
-Deliverable 1 states the ball's physical size is the only measurement input, and **nothing in the app collects it.** There is no picker, no stored setting, and no constant in the code. Scale calibration cannot work without it.
+**What remains open** is what the UI presents. Two numbers with a caveat is honest but may be more than a coach wants mid-session. Whichever is shown, it must be labelled a theoretical maximum, or the coach will read it as where the ball would land.
 
-Open sub-questions: a picker of standard sizes (3, 4, 5) versus a diameter in millimetres; whether it is set per clip or once as a setting; and whether it is captured at record time or at analysis time. Recording it per clip at capture time is the safer default, since a clip whose ball size is unknown later is not measurable at all.
+**How does the app learn the ball's size?** — **Answered.**
+
+A segmented picker of the three standard sizes on the Record screen, captured **per clip at record time**, not as a global setting: a setting describes the app's state now, not the state when a clip was filmed, and a clip whose ball size is unknown later is not measurable at all.
+
+Diameters come from the midpoint of each size's official circumference range — 189.4 mm, 206.1 mm, 219.6 mm for sizes 3, 4 and 5 — and are nominal. A ball's real diameter varies with inflation pressure and wear, which puts a floor on accuracy that no amount of tracking precision can lift.
+
+**The size is written twice, deliberately.** A filename token (`-sz4`) so it is legible in the Files app and to analysis code without opening the video, and `mdta` metadata inside the movie as the authoritative copy. They can only disagree if a file is renamed, and renaming damages the filename while leaving the metadata intact — so the copy that survives the failure mode wins. Both travel with the file over AirDrop, which a sidecar file would not.
+
+Custom diameters in millimetres were considered and rejected as slower to set pitch-side. Revisit if a measured ball is ever wanted.
 
 **How should a goal kick be filmed?**
 
-Unrecorded, and it gates Step 3's feasibility. Camera distance, angle relative to the kick direction, and whether the operator pans or holds the phone fixed all change how hard tracking is and how accurate the result can be. Panning in particular moves the background, which affects tracker behaviour, and changes what the camera attitude correction has to account for.
+Still open as a protocol, but the first session is now on record. Camera distance, angle relative to the kick direction, and whether the operator pans or holds the phone fixed all change how hard tracking is and how accurate the result can be.
 
-Establish a repeatable protocol while filming the first clips, and record it here, so later footage is comparable with earlier footage.
+**First footage, filmed 2026-08-21:** Size 4 ball, teal. Ten clips — five at 1080p/240, then five at 4K/120. Camera **side on and static** (handheld, no deliberate pan; the framing holds across a whole clip). Distance not measured. These clips predate the ball size selector, so they carry no size token and no metadata.
+
+**What was filmed is not a goal kick.** The kicker strikes into a portable net. Measured from the first clip: the ball is **~4.2 m** from the camera, contact is at frame 545, free flight begins around 548 once the ball leaves the boot, and it reaches the net by ~589 — about **0.17 s** of flight. Speed is ~13 m/s at ~25°, against the ~30 m/s this document assumes elsewhere. The kick runs **11° off perpendicular, toward the camera**, right at the guardrail limit.
+
+**All four metrics are still obtainable in principle**, because carry and apex are computed from launch conditions rather than observed — see *Measurement Approach*. An earlier note here claimed the net made them unrecoverable; that was wrong.
+
+The clips are excellent tracker development footage precisely because they are easy: sharp ball, ~60–70 px across, near-static camera, strong colour separation, never against sky. A tracker that fails here fails everywhere. They are **poor physics validation footage**, because the flight is short and not square, which is where the trouble described below begins.
+
+**Also note the format comparison cannot be done as this document proposes.** One phone has one active format at a time, so the same kick cannot be recorded at 1080p/240 and 4K/120 simultaneously. The five-and-five sets are different kicks. Comparing configurations means comparing sets in aggregate, or using two devices.
+
+Camera distance should be paced out and recorded in future sessions. It is the dominant accuracy parameter — see *Pixels on the ball* above.
+
+**The gravity discrepancy — the largest open problem in the project**
+
+`compute_metrics.py` fits gravity from the data rather than assuming it. Nothing tells the fit that gravity is 9.81; the value falls out of the pixel scale, the frame timestamps and the 3D reconstruction alone. **On the first clip it comes out at 3.49 m/s², 64% low.** Until that is understood, every metric the pipeline produces is void.
+
+What is established:
+
+- **It is not the flight window.** Contact detection and boot-phase exclusion were both corrected; the fit runs from frame 548 to 580, clear of the boot and clear of the net.
+- **It is not camera shake.** Background registration shifts the ball by ~1 px and reports drift flat to within 0.1 px across the fitted frames.
+- **It is not the flat-plane assumption alone.** Correcting that raised gravity from −0.16 to 3.49. It was part of the problem, not all of it.
+- **The vertical motion is the wrong shape.** Averaged over 16 frames each, the ball rises at **6.53 px/frame early and 6.75 px/frame late**. It accelerates upward. Free flight forbids this; gravity can only slow a rise. Expected late value was ~6.0 px/frame allowing for perspective.
+
+The inconsistency, stated precisely: **the kinematics require the ball to be closing on the camera by ~25% across the flight; measured diameter says 5%.** Both cannot be true.
+
+Candidate explanations, none confirmed:
+
+- **Diameter is biased by the background.** In the late frames the ball is in front of dark netting rather than grass, and a detector box may grow spuriously at that boundary. This is the leading suspect and would produce exactly this signature.
+- **Backspin.** A ball struck with heavy backspin gets an upward Magnus force, which at 13 m/s could offset perhaps 25–30% of gravity. Real, and insufficient — it cannot explain a 64% deficit, and cannot produce *acceleration*.
+- **A systematic vertical drift in the detector box** as the ball crosses from grass to net to sky.
+
+**Next diagnostic, cheap and unwritten:** run the remaining nine clips. If gravity lands near 9.81 on any of them, the fault is specific to this clip. If all nine show the same deficit, it is systematic in the method. The 4K clips are the more informative test, since twice the pixels across the ball roughly halves the depth noise that the whole 3D reconstruction rests on.
+
+Establish a repeatable protocol as filming continues, and record it here, so later footage is comparable with earlier footage.
 
 ## End of Document
