@@ -269,6 +269,56 @@ enum ClipStore {
     static func delete(_ clip: Clip) {
         try? FileManager.default.removeItem(at: clip.url)
     }
+
+    /// Takes a clip handed to the app from outside — AirDrop, the Files app,
+    /// another app's share sheet — into the app's own library.
+    ///
+    /// **The original filename is kept.** It carries the capture
+    /// configuration and the ball size as tokens, and a clip renamed to a
+    /// fresh timestamp would lose the only copy of its ball size that is
+    /// visible without opening the file. Collisions get a numeric suffix
+    /// rather than overwriting.
+    @discardableResult
+    static func importClip(from source: URL) throws -> URL {
+        // A URL arriving from another process is usually security-scoped: the
+        // app is lent access for as long as it asks for it, and reads fail
+        // without that. Harmless to call when the URL is our own.
+        let scoped = source.startAccessingSecurityScopedResource()
+        defer { if scoped { source.stopAccessingSecurityScopedResource() } }
+
+        let destination = availableURL(named: source.lastPathComponent)
+
+        // Copy, never move. The source may belong to another app or to a
+        // file provider, and moving it would delete someone else's data.
+        try FileManager.default.copyItem(at: source, to: destination)
+
+        // When iOS hands an app a file it does not open in place, it leaves a
+        // copy in Documents/Inbox. That directory is ours to tidy, and it is
+        // visible in the Files app, so leaving copies there would be clutter
+        // the user has to clean up by hand.
+        if source.path.contains("/Inbox/") {
+            try? FileManager.default.removeItem(at: source)
+        }
+
+        return destination
+    }
+
+    /// The given name inside the clips directory, suffixed if taken.
+    private static func availableURL(named name: String) -> URL {
+        let stem = (name as NSString).deletingPathExtension
+        let ext = (name as NSString).pathExtension
+        let clips = directory
+
+        var candidate = clips.appendingPathComponent(name)
+        var counter = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = clips
+                .appendingPathComponent("\(stem)-\(counter)")
+                .appendingPathExtension(ext)
+            counter += 1
+        }
+        return candidate
+    }
 }
 
 // MARK: - Recorder

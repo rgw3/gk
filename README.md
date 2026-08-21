@@ -17,6 +17,7 @@ Early development. **The app captures and reviews. The measurement works, but on
 | Clip storage in the app's own library | Working, verified on device |
 | Getting clips off the device | Working, verified on device |
 | Video review, frame stepping, zoom, telestration | Working, verified on device |
+| Importing and sharing clips | Built, not yet verified on device |
 | Ball detection and tracking | Working — Mac-side Python only |
 | Metrics (velocity, angle, carry, apex) | Written — Mac-side Python only, accuracy unresolved |
 | Any measurement inside the app | Not started |
@@ -78,7 +79,11 @@ Both flight models are computed and shown side by side — a drag-free parabola 
 
 This is not a preference. Saving a 240 fps clip to Photos makes iOS classify it as slow motion, and reading it back returns a **30 fps** file — every frame present, but timestamps 8× too far apart. Δt would read 1/30 s instead of 1/240 s, making every velocity 8× too slow with no visible symptom. Photos is not a safe store for measurement footage, so the app owns its own.
 
-**To get clips off the device,** the app enables file sharing, so `Documents/` appears in the Files app under *On My iPhone → GoalKick*. AirDrop from there copies the file byte for byte and true frame timing survives. On the receiving device, **save to Files, never to Photos.**
+**This decision is currently under review.** A 4K/120 clip has since round-tripped through Photos with its timing intact, which the original test did not predict. The 240 fps case — the one that failed — has not been retested, and neither has the path where the app itself writes to Photos and reads back. `project_notes.md` has the detail. Storage stays in `Documents/` until that is settled.
+
+**To get clips off the device, use the cable.** Finder → the device under *Locations* → the **Files** tab → *GoalKick → Clips* → drag them out. Byte for byte, nothing to discover, works for iPhone and iPad alike.
+
+**AirDrop is not reliable for this.** iOS routes an AirDropped video into Photos on its own without asking, which is the one destination that may retime it. The clip browser has an **Import** button that reaches out and fetches a file from wherever it landed, and a **share** button on each row for sending one out.
 
 Nothing prunes the clip directory except deleting rows in the app, and 4K/120 runs roughly 6 MB per second.
 
@@ -106,12 +111,13 @@ Nothing here ships. It is a spike whose findings port to Vision, Core ML and Acc
 
 ## Project layout
 
-- `ContentView.swift` — tab bar container
+- `ContentView.swift` — tab bar container, and the landing point for clips sent to the app from outside it
 - `RecordView.swift` — capture screen: live preview, configuration picker, ball size picker, record button
 - `Recorder.swift` — `CaptureConfig`, `BallSize`, `ClipMetadata`, `ClipStore`, capture session, format selection, orientation, recording, file verification
 - `ReviewView.swift` — playback controller, transport, scrubbing, looping, frame stepping, zoom, telestration, clip browser
 - `Info.plist` — only the Info keys Xcode's `INFOPLIST_KEY_*` allowlist cannot express; everything else is generated from build settings
 - `tools/` — the Mac-side Python pipeline, deliberately outside `GoalKick/` so Xcode's synchronized folders do not sweep it into the app target
+- `shot-list.txt` — the filming protocol, plain text so it opens on a phone in a field
 - `project_notes.md` — decisions, current state, open questions
 
 ## Terminology

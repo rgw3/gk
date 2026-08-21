@@ -14,6 +14,7 @@ import Combine
 import AVFoundation
 import CoreMedia
 import UIKit
+import UniformTypeIdentifiers
 
 // MARK: - Playback controller
 
@@ -721,35 +722,22 @@ struct ClipListView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var clips: [Clip] = []
+    @State private var showingImporter = false
+    @State private var importError: String?
 
     var body: some View {
         NavigationStack {
             Group {
                 if clips.isEmpty {
-                    ContentUnavailableView("No clips yet",
-                                           systemImage: "video.slash",
-                                           description: Text("Record a goal kick on the Record tab."))
+                    ContentUnavailableView(
+                        "No clips yet",
+                        systemImage: "video.slash",
+                        description: Text("Record a goal kick on the Record tab, "
+                                          + "or use Import to bring one in from Files."))
                 } else {
                     List {
                         ForEach(clips) { clip in
-                            Button {
-                                onSelect(clip)
-                                dismiss()
-                            } label: {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(clip.name)
-                                        .font(.system(.subheadline, design: .monospaced))
-                                    Text("\(clip.created.formatted(date: .abbreviated, time: .standard))  ·  \(clip.sizeDescription)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    // A clip with no ball size cannot be
-                                    // measured, so it is called out rather
-                                    // than left looking like the others.
-                                    Text(clip.ballDescription)
-                                        .font(.caption)
-                                        .foregroundStyle(clip.ballSize == nil ? .orange : .secondary)
-                                }
-                            }
+                            row(for: clip)
                         }
                         .onDelete { offsets in
                             for index in offsets {
@@ -765,15 +753,87 @@ struct ClipListView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
                 }
-                if !clips.isEmpty {
-                    ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button("Import", systemImage: "square.and.arrow.down") {
+                        showingImporter = true
+                    }
+                    if !clips.isEmpty {
                         EditButton()
                     }
                 }
             }
         }
+        // The reliable way in. iOS decides for itself where an AirDropped
+        // movie lands — usually Files, sometimes Photos — and never offers a
+        // choice, so waiting to be handed a clip does not work. Reaching out
+        // and fetching one does, wherever it ended up.
+        .fileImporter(isPresented: $showingImporter,
+                      allowedContentTypes: [.quickTimeMovie, .movie],
+                      allowsMultipleSelection: true,
+                      onCompletion: receive)
+        .alert("Could not import",
+               isPresented: Binding(get: { importError != nil },
+                                    set: { if !$0 { importError = nil } })) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(importError ?? "")
+        }
         .onAppear {
             clips = ClipStore.clips()
+        }
+    }
+
+    private func row(for clip: Clip) -> some View {
+        HStack {
+            Button {
+                onSelect(clip)
+                dismiss()
+            } label: {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(clip.name)
+                        .font(.system(.subheadline, design: .monospaced))
+                    Text("\(clip.created.formatted(date: .abbreviated, time: .standard))  ·  \(clip.sizeDescription)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    // A clip with no ball size cannot be measured, so it is
+                    // called out rather than left looking like the others.
+                    Text(clip.ballDescription)
+                        .font(.caption)
+                        .foregroundStyle(clip.ballSize == nil ? .orange : .secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+
+            // Sends the file itself, so AirDrop copies it byte for byte and
+            // the frame timing survives. Both buttons need an explicit style:
+            // inside a List row, the default makes the whole row one tap
+            // target and the share button would never be reachable.
+            ShareLink(item: clip.url) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.body)
+            }
+        }
+        .buttonStyle(.borderless)
+    }
+
+    private func receive(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            var failures: [String] = []
+            for url in urls {
+                do {
+                    try ClipStore.importClip(from: url)
+                } catch {
+                    failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
+                }
+            }
+            clips = ClipStore.clips()
+            if !failures.isEmpty {
+                importError = failures.joined(separator: "\n")
+            }
+        case .failure(let error):
+            importError = error.localizedDescription
         }
     }
 }

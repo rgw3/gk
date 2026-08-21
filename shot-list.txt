@@ -1,0 +1,82 @@
+GOALKICK - SHOT LIST
+Read this in the field. Plain text so it opens anywhere.
+
+
+BEFORE YOU START
+
+1. Open the app, set the BALL SIZE. Note which ball you used.
+2. Phone in landscape.
+3. Pick a spot to the SIDE of the kick.
+
+
+WHERE TO STAND
+
+4. Stand so the ball flies ACROSS your screen - left to right, or
+   right to left. Never toward you or away from you.
+5. Pace out 10 to 12 paces from the ball. WRITE THE NUMBER DOWN.
+6. Hold the phone level and at chest height. Do not tilt it up.
+
+
+HOW TO FRAME IT
+
+7. Put the ball about a quarter of the way in from one edge - the
+   edge it is going to travel AWAY from.
+8. Most of the screen should be the direction the ball is heading,
+   not the space behind the kicker.
+
+
+EACH KICK
+
+9.  Ball sits STILL and in frame for at least 3 seconds first.
+10. Start recording early. Stop recording late.
+11. Hold the phone still. DO NOT PAN. Let the ball fly out of frame.
+12. Ball must fly free. No net, no wall, nothing stopping it.
+
+
+WHAT TO SHOOT
+
+13. Five kicks at 1080p / 240.
+14. Five kicks at 4K / 120.
+15. For at least 3 of those kicks, PACE OUT WHERE THE BALL FIRST
+    LANDS and write it down next to the clip time.
+16. One extra kick with yourself deliberately at an angle, about
+    30 degrees off to the side. This one is a test.
+
+
+DO NOT
+
+- Do not pan or follow the ball with the phone.
+- Do not stand behind or in front of the kicker.
+- Do not kick into a net.
+- Do not tilt the phone up as the ball rises.
+- Do not forget to set the ball size in the app.
+
+
+WHY TWO OF THESE MATTER
+
+Item 15 is the most valuable thing here. The app works out carry
+distance from physics, and nothing has ever checked that number
+against reality. Pacing out where the ball actually lands is the
+only way to find out whether the drag model is any good. Paces are
+fine - counting the same way every time matters more than accuracy.
+
+Item 16 is a control. The app should flag that clip as off-square
+and its gravity check should get worse in a predictable way. If it
+does not, the warning is broken and we need to know.
+
+
+GETTING THE CLIPS OFF THE PHONE
+
+Use the cable. It is the only route that behaves predictably:
+
+  Finder -> iPhone under Locations -> Files tab -> GoalKick -> Clips
+  -> drag the .mov files out.
+
+DO NOT rely on AirDrop for this. iOS decides for itself where an
+AirDropped video goes and does not ask - it usually drops it into
+Photos. Photos may retime high frame rate video, and if it does,
+every speed the app calculates comes out eight times too slow with
+nothing on screen to tell you.
+
+If a clip does end up somewhere odd, the app's clip browser has an
+Import button that can fetch it back out of Files.

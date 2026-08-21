@@ -23,5 +23,36 @@
 	-->
 	<key>UIFileSharingEnabled</key>
 	<true/>
+
+	<!--
+	  Declares the app as somewhere a movie can be sent, so AirDrop offers
+	  GoalKick directly as a destination instead of forcing a detour through
+	  the Files app.
+
+	  That detour had a trap in it: iOS only lists an app's folder in Files
+	  once the folder is non-empty, so on a device where GoalKick had never
+	  recorded anything there was no GoalKick destination to save into, and
+	  an AirDropped clip would land in Downloads - or worse, in Photos, which
+	  retimes high frame rate video and silently ruins it for measurement.
+
+	  Rank is Alternate, not Owner: GoalKick is one of several reasonable
+	  places to send a .mov, not the system's idea of what a movie is for.
+	-->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Video Clip</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.apple.quicktime-movie</string>
+				<string>public.movie</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>
