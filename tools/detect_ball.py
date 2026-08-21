@@ -305,16 +305,30 @@ def run(args) -> None:
     info = describe(capture, args.video, args.auto_rotate)
     print_description(info)
 
-    if info["width"] > args.imgsz:
+    if args.imgsz is None:
+        # Default to the clip's own width, so nothing is thrown away before
+        # the detector ever sees it. Measured on one 4K clip, dropping the
+        # downscale from 0.33x to 0.50x cut range scatter from 200 mm to
+        # 118 mm and moved fitted gravity from 7.49 to 8.86 m/s^2 -- the
+        # physics did not change, only how much of the ball the model got to
+        # look at. YOLO wants a multiple of 32.
+        args.imgsz = int(round(info["width"] / 32)) * 32
+        print(f"Running the detector at {args.imgsz} px, the clip's own "
+              "width — no downscale.")
+        if args.imgsz > 2048:
+            print("This is slow at 4K. Pass --imgsz 1920 for a quicker, "
+                  "slightly coarser run.")
+        print()
+    elif info["width"] > args.imgsz:
         # Worth stating plainly, because it is the most common reason
-        # small-ball detection fails. The model resizes the frame before
-        # looking at it, so a 70 px ball in a 1920 px frame is only 23 px to a
-        # model running at imgsz 640.
+        # small-ball detection fails, and because it silently degrades
+        # diameter -- which is what every distance in the pipeline rests on.
         scale = args.imgsz / info["width"]
         print(
             f"NOTE: frames are {info['width']} px wide and the model sees "
             f"{args.imgsz} px, so the ball is scaled to {scale:.2f}x its "
-            "size in the file. Raise --imgsz if detection is poor."
+            "size in the file. This costs diameter precision and therefore "
+            "range. Omit --imgsz to run at full width."
         )
         print()
 
@@ -519,8 +533,10 @@ def build_parser() -> argparse.ArgumentParser:
                         choices=["yolo11n.pt", "yolo11s.pt"],
                         help="pre-trained weights (default yolo11n.pt); "
                              "restricted to what will run on-device")
-    parser.add_argument("--imgsz", type=int, default=1280,
-                        help="size the model resizes frames to (default 1280)")
+    parser.add_argument("--imgsz", type=int, default=None,
+                        help="size the model resizes frames to; defaults to "
+                             "the clip's own width, which is the most "
+                             "accurate and the slowest")
     parser.add_argument("--confidence", type=float, default=0.25,
                         help="minimum detection confidence (default 0.25)")
     parser.add_argument("--device", default=None,

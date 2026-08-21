@@ -336,18 +336,381 @@ final class PlayerContainerView: UIView {
     }
 }
 
-struct PlayerSurface: UIViewRepresentable {
-    let player: AVPlayer
+/// The video surface, with pinch to zoom and pan while zoomed.
+///
+/// Built on `UIScrollView` rather than SwiftUI's `MagnifyGesture` and
+/// `DragGesture`. Zooming is more than a scale factor: the pan has to stay
+/// inside the content, the two gestures have to compose without fighting, a
+/// zoomed picture has to stay put while the video steps frame by frame, and
+/// letting go should settle rather than stop dead. `UIScrollView` has done all
+/// of that since 2007, and reimplementing it in gesture callbacks means
+/// reimplementing the edge cases too.
+///
+/// **Zoom is presentation only.** Measurement reads the stored pixels; nothing
+/// here touches them, and a zoomed review changes no number.
+///
+/// A Swift note, since this pattern recurs: `UIViewRepresentable` is the
+/// bridge from UIKit into SwiftUI. `makeUIView` builds the view once,
+/// `updateUIView` runs whenever SwiftUI state changes, and the `Coordinator`
+/// is where delegate callbacks live — UIKit talks to it, not to the struct,
+/// because the struct is a value that SwiftUI recreates constantly.
+// MARK: - Telestration
 
-    func makeUIView(context: Context) -> PlayerContainerView {
-        let view = PlayerContainerView()
-        view.playerLayer.player = player
-        view.playerLayer.videoGravity = .resizeAspect
-        return view
+/// Yellow strokes drawn over the video, which stay put while it plays.
+///
+/// **Strokes are stored normalised to the picture, not to the screen.** A
+/// point is kept as a fraction of the video's own rectangle — (0.5, 0.5) is
+/// the middle of the picture whatever the zoom, the orientation, or the size
+/// of the letterbox bars around it. Screen coordinates would have been less
+/// code and wrong: a circle drawn around the plant foot would slide off it the
+/// moment the coach zoomed in, and turning the phone would scatter every line.
+///
+/// Line width is normalised the same way, so a stroke drawn while zoomed in
+/// does not become a fat band when zoomed back out. The annotation behaves as
+/// though painted onto the video itself.
+final class DrawingCanvasView: UIView {
+
+    struct Stroke {
+        /// Points as fractions of the picture rectangle, 0...1.
+        var points: [CGPoint]
+        /// Line width as a fraction of the picture's width.
+        var width: CGFloat
     }
 
-    func updateUIView(_ uiView: PlayerContainerView, context: Context) {
-        uiView.playerLayer.player = player
+    private(set) var strokes: [Stroke] = []
+    private var current: Stroke?
+
+    /// Where the picture actually is, letterbox bars excluded.
+    var pictureRect: CGRect = .zero {
+        didSet { if pictureRect != oldValue { setNeedsDisplay() } }
+    }
+
+    /// Current magnification, so a stroke drawn zoomed in comes out the same
+    /// apparent thickness as one drawn zoomed out.
+    var zoom: CGFloat = 1
+
+    /// Thickness the coach should see, in points, before zoom is accounted for.
+    var targetWidth: CGFloat = 4
+
+    var onStrokesChanged: ((Bool) -> Void)?
+
+    private var baseScaleFactor: CGFloat = 0
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isOpaque = false
+        // One finger, one line. Without this a second finger extends the same
+        // stroke from wherever it lands.
+        isMultipleTouchEnabled = false
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("DrawingCanvasView is created in code, never from a nib")
+    }
+
+    // MARK: Drawing
+
+    /// Deliberately silent: this is driven from `updateUIView`, and calling
+    /// back into SwiftUI state from inside a view update is what produces
+    /// "Modifying state during view update" at runtime. Whoever asked for the
+    /// clear already knows there are no strokes left.
+    func clear() {
+        strokes.removeAll()
+        current = nil
+        setNeedsDisplay()
+    }
+
+    /// Re-renders at the zoomed resolution rather than magnifying an image
+    /// drawn for 1×, which is what keeps lines sharp at high zoom.
+    func applyZoom(_ newZoom: CGFloat) {
+        zoom = newZoom
+        if baseScaleFactor == 0 { baseScaleFactor = contentScaleFactor }
+        contentScaleFactor = baseScaleFactor * max(1, newZoom)
+        setNeedsDisplay()
+    }
+
+    override func draw(_ rect: CGRect) {
+        guard pictureRect.width > 0, let context = UIGraphicsGetCurrentContext() else { return }
+
+        context.setStrokeColor(UIColor.systemYellow.cgColor)
+        context.setFillColor(UIColor.systemYellow.cgColor)
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+
+        for stroke in strokes + (current.map { [$0] } ?? []) {
+            let width = stroke.width * pictureRect.width
+            let points = stroke.points.map(denormalise)
+
+            guard let first = points.first else { continue }
+
+            if points.count == 1 {
+                // A tap should leave a mark rather than nothing at all.
+                context.fillEllipse(in: CGRect(x: first.x - width / 2,
+                                               y: first.y - width / 2,
+                                               width: width, height: width))
+                continue
+            }
+
+            context.setLineWidth(width)
+            context.move(to: first)
+            for point in points.dropFirst() { context.addLine(to: point) }
+            context.strokePath()
+        }
+    }
+
+    // MARK: Touches
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = touches.first, pictureRect.width > 0 else { return }
+        let width = (targetWidth / max(zoom, 0.01)) / pictureRect.width
+        current = Stroke(points: [normalise(touch.location(in: self))], width: width)
+        setNeedsDisplay()
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = touches.first, current != nil else { return }
+
+        // Coalesced touches are the ones the system captured between screen
+        // refreshes. Apple Pencil reports far faster than 60 Hz, and ignoring
+        // them turns a smooth arc into a chain of visible straight segments.
+        let moves = event?.coalescedTouches(for: touch) ?? [touch]
+        for move in moves {
+            current?.points.append(normalise(move.location(in: self)))
+        }
+        setNeedsDisplay()
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        finishStroke()
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        current = nil
+        setNeedsDisplay()
+    }
+
+    private func finishStroke() {
+        guard let stroke = current else { return }
+        strokes.append(stroke)
+        current = nil
+        setNeedsDisplay()
+        onStrokesChanged?(true)
+    }
+
+    // MARK: Coordinates
+
+    private func normalise(_ point: CGPoint) -> CGPoint {
+        CGPoint(x: (point.x - pictureRect.minX) / pictureRect.width,
+                y: (point.y - pictureRect.minY) / pictureRect.height)
+    }
+
+    private func denormalise(_ point: CGPoint) -> CGPoint {
+        CGPoint(x: pictureRect.minX + point.x * pictureRect.width,
+                y: pictureRect.minY + point.y * pictureRect.height)
+    }
+}
+
+/// A scroll view that keeps the video sized to itself.
+///
+/// This lives in `layoutSubviews` rather than in `updateUIView` because
+/// SwiftUI runs `updateUIView` when *state* changes, which is not necessarily
+/// after it has decided how big this view is — on first appearance the bounds
+/// can still be zero. `layoutSubviews` runs when the size is real, and again
+/// on every rotation.
+final class ZoomingScrollView: UIScrollView {
+    let videoView = PlayerContainerView()
+    /// A subview of videoView, so the scroll view's zoom transform applies to
+    /// the strokes as well as to the picture — annotations track the video for
+    /// free rather than needing their own transform maintained alongside.
+    let canvas = DrawingCanvasView(frame: .zero)
+    private var lastSize: CGSize = .zero
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+
+        if bounds.size != .zero, bounds.size != lastSize {
+            lastSize = bounds.size
+
+            // Returning to fit on a size change is deliberate. The zooming
+            // view's frame is what UIScrollView transforms, so resizing it
+            // mid-zoom fights the gesture — and when the phone is turned,
+            // landing back at the whole picture is what a coach expects.
+            setZoomScale(1, animated: false)
+            videoView.frame = CGRect(origin: .zero, size: bounds.size)
+            contentSize = bounds.size
+            contentInset = .zero
+        }
+
+        syncCanvas()
+    }
+
+    /// Keeps the canvas over the picture and tells it where the picture is.
+    ///
+    /// `videoRect` reports zero until the player item has loaded and reported
+    /// its dimensions, so this is called from layout and again whenever
+    /// SwiftUI updates — whichever happens after the video is ready.
+    func syncCanvas() {
+        canvas.frame = videoView.bounds
+        let rect = videoView.playerLayer.videoRect
+        canvas.pictureRect = rect.isEmpty ? videoView.bounds : rect
+    }
+}
+
+struct ZoomableVideoView: UIViewRepresentable {
+    let player: AVPlayer
+    /// Bumped by the parent to demand a return to fit. A counter rather than a
+    /// boolean so that repeated resets each register, and so the parent never
+    /// has to reach in and clear a flag afterwards.
+    let resetToken: Int
+    @Binding var zoomScale: CGFloat
+    let onSingleTap: () -> Void
+    /// When on, the canvas takes every touch and the scroll view takes none.
+    let isDrawing: Bool
+    /// Bumped by the parent to wipe the strokes, same counter trick as reset.
+    let clearToken: Int
+    let onStrokesChanged: (Bool) -> Void
+
+    func makeUIView(context: Context) -> ZoomingScrollView {
+        let scrollView = ZoomingScrollView()
+        scrollView.delegate = context.coordinator
+        scrollView.minimumZoomScale = 1
+        scrollView.maximumZoomScale = 8
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.backgroundColor = .black
+        scrollView.contentInsetAdjustmentBehavior = .never
+
+        let videoView = scrollView.videoView
+        videoView.playerLayer.player = player
+        videoView.playerLayer.videoGravity = .resizeAspect
+        videoView.backgroundColor = .black
+        scrollView.addSubview(videoView)
+        videoView.addSubview(scrollView.canvas)
+
+        context.coordinator.videoView = videoView
+        context.coordinator.scrollView = scrollView
+
+        let doubleTap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        scrollView.addGestureRecognizer(doubleTap)
+
+        let singleTap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleSingleTap))
+        singleTap.numberOfTapsRequired = 1
+        // Without this, the first tap of a double tap toggles the controls on
+        // its way to zooming.
+        singleTap.require(toFail: doubleTap)
+        scrollView.addGestureRecognizer(singleTap)
+
+        context.coordinator.singleTap = singleTap
+        context.coordinator.doubleTap = doubleTap
+
+        return scrollView
+    }
+
+    func updateUIView(_ scrollView: ZoomingScrollView, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.onSingleTap = onSingleTap
+        coordinator.zoomScale = $zoomScale
+        scrollView.videoView.playerLayer.player = player
+        scrollView.canvas.onStrokesChanged = onStrokesChanged
+
+        // videoRect is only known once the item has loaded, which is usually
+        // after the first layout pass.
+        scrollView.syncCanvas()
+
+        // Drawing mode owns the surface outright. Leaving pan or pinch live
+        // would make a one-finger drag ambiguous — draw a line, or scroll the
+        // picture? — and the tap recognisers would toggle the controls on
+        // every dot the coach places.
+        scrollView.canvas.isUserInteractionEnabled = isDrawing
+        scrollView.isScrollEnabled = !isDrawing
+        scrollView.pinchGestureRecognizer?.isEnabled = !isDrawing
+        coordinator.singleTap?.isEnabled = !isDrawing
+        coordinator.doubleTap?.isEnabled = !isDrawing
+
+        if coordinator.lastClearToken != clearToken {
+            coordinator.lastClearToken = clearToken
+            scrollView.canvas.clear()
+        }
+
+        if coordinator.lastResetToken != resetToken {
+            coordinator.lastResetToken = resetToken
+            scrollView.setZoomScale(1, animated: true)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        weak var scrollView: UIScrollView?
+        var videoView: PlayerContainerView?
+        var onSingleTap: () -> Void = {}
+        var zoomScale: Binding<CGFloat>?
+        var lastResetToken = 0
+        var lastClearToken = 0
+        weak var singleTap: UITapGestureRecognizer?
+        weak var doubleTap: UITapGestureRecognizer?
+
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+            videoView
+        }
+
+        func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            centreContent(in: scrollView)
+            let scale = scrollView.zoomScale
+            // Redraw the strokes at the zoomed resolution so they stay sharp
+            // rather than being magnified as an image.
+            (scrollView as? ZoomingScrollView)?.canvas.applyZoom(scale)
+            // Published asynchronously: this fires during UIKit's layout, and
+            // writing SwiftUI state from inside a layout pass is what produces
+            // "Modifying state during view update" at runtime.
+            DispatchQueue.main.async { [weak self] in
+                self?.zoomScale?.wrappedValue = scale
+            }
+        }
+
+        @objc func handleSingleTap() {
+            onSingleTap()
+        }
+
+        @objc func handleDoubleTap(_ recognizer: UITapGestureRecognizer) {
+            guard let scrollView, let videoView else { return }
+
+            if scrollView.zoomScale > scrollView.minimumZoomScale * 1.01 {
+                scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
+                return
+            }
+
+            // Zoom in on what was tapped rather than on the middle of the
+            // screen — the coach is pointing at the ball, not at the centre.
+            let target: CGFloat = 3
+            let point = recognizer.location(in: videoView)
+            let size = CGSize(width: scrollView.bounds.width / target,
+                              height: scrollView.bounds.height / target)
+            scrollView.zoom(to: CGRect(x: point.x - size.width / 2,
+                                       y: point.y - size.height / 2,
+                                       width: size.width,
+                                       height: size.height),
+                            animated: true)
+        }
+
+        /// Keeps the picture centred instead of pinned to the top-left when it
+        /// is smaller than the scroll view, which is what it looks like during
+        /// a pinch that bounces back.
+        private func centreContent(in scrollView: UIScrollView) {
+            guard let videoView else { return }
+            let horizontal = max(0, (scrollView.bounds.width - videoView.frame.width) / 2)
+            let vertical = max(0, (scrollView.bounds.height - videoView.frame.height) / 2)
+            scrollView.contentInset = UIEdgeInsets(top: vertical, left: horizontal,
+                                                   bottom: vertical, right: horizontal)
+        }
     }
 }
 
@@ -423,6 +786,11 @@ struct ReviewView: View {
     @State private var showingClips = false
     @State private var controlsVisible = true
     @State private var hideTask: Task<Void, Never>?
+    @State private var zoomScale: CGFloat = 1
+    @State private var zoomResetToken = 0
+    @State private var isDrawing = false
+    @State private var hasStrokes = false
+    @State private var clearToken = 0
 
     private let speeds: [Double] = [1.0, 0.5, 0.25, 0.125]
 
@@ -432,10 +800,39 @@ struct ReviewView: View {
                 .ignoresSafeArea()
 
             if let player = review.player {
-                PlayerSurface(player: player)
+                ZoomableVideoView(player: player,
+                                  resetToken: zoomResetToken,
+                                  zoomScale: $zoomScale,
+                                  onSingleTap: toggleControls,
+                                  isDrawing: isDrawing,
+                                  clearToken: clearToken,
+                                  onStrokesChanged: { hasStrokes = $0 })
                     .ignoresSafeArea()
             } else {
                 emptyState
+                    // contentShape makes the whole area tappable, including
+                    // the black bars beside a portrait video.
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: toggleControls)
+            }
+
+            // Always on screen, not in the auto-hiding panel. Drawing is a
+            // mode, and a mode the coach cannot see they are in is a trap —
+            // they would wonder why the video had stopped responding to a
+            // drag. The zoom badge is here for the same reason: a magnified
+            // picture with the controls hidden looks like footage that was
+            // simply filmed close up.
+            if review.player != nil {
+                VStack {
+                    HStack(alignment: .top) {
+                        drawingControls
+                        Spacer()
+                        if zoomScale > 1.01 { zoomBadge }
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 8)
             }
 
             VStack {
@@ -446,21 +843,19 @@ struct ReviewView: View {
                 }
             }
         }
-        // contentShape makes the whole area tappable, including the black
-        // bars beside a portrait video.
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if controlsVisible {
-                hideTask?.cancel()
-                withAnimation(.easeInOut(duration: 0.2)) { controlsVisible = false }
-            } else {
-                revealControls()
-            }
-        }
         .sheet(isPresented: $showingClips) {
             ClipListView { clip in
                 Task {
                     await review.load(url: clip.url)
+                    // A new clip starts clean. Carrying one clip's zoom into
+                    // the next would leave the coach looking at a magnified
+                    // corner of footage they have not seen yet, and carrying
+                    // its annotations over would be worse — lines drawn on one
+                    // kicker's technique, floating over another's.
+                    zoomResetToken += 1
+                    clearToken += 1
+                    hasStrokes = false
+                    isDrawing = false
                     revealControls()
                 }
             }
@@ -470,7 +865,74 @@ struct ReviewView: View {
         }
     }
 
+    // MARK: Telestration
+
+    /// Drawing toggle, and a clear button that appears once there is
+    /// something to clear. Kept deliberately small — they sit permanently
+    /// over the picture, and the picture is the point.
+    private var drawingControls: some View {
+        HStack(spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { isDrawing.toggle() }
+            } label: {
+                roundIcon("scribble.variable", active: isDrawing)
+            }
+            .accessibilityLabel(isDrawing ? "Stop drawing" : "Draw on the video")
+
+            if hasStrokes {
+                Button {
+                    clearToken += 1
+                    hasStrokes = false
+                } label: {
+                    roundIcon("trash", active: false)
+                }
+                .accessibilityLabel("Clear drawing")
+                .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: hasStrokes)
+    }
+
+    private func roundIcon(_ symbol: String, active: Bool) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 14, weight: .semibold))
+            .frame(width: 34, height: 34)
+            .background(active ? Color.yellow : Color.black.opacity(0.65),
+                        in: Circle())
+            .foregroundStyle(active ? Color.black : Color.white)
+    }
+
+    // MARK: Zoom
+
+    /// Current magnification, and a way back to fit. Tapping it resets.
+    private var zoomBadge: some View {
+        Button {
+            zoomResetToken += 1
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                Text(String(format: "%.1f×", zoomScale))
+                    .monospacedDigit()
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.black.opacity(0.65), in: Capsule())
+        }
+        .accessibilityLabel("Reset zoom")
+    }
+
     // MARK: Auto-hide
+
+    private func toggleControls() {
+        if controlsVisible {
+            hideTask?.cancel()
+            withAnimation(.easeInOut(duration: 0.2)) { controlsVisible = false }
+        } else {
+            revealControls()
+        }
+    }
 
     /// Shows the controls and restarts the idle countdown. Called on every
     /// interaction so the panel never vanishes mid-adjustment.

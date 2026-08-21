@@ -148,10 +148,18 @@ enum BallSize: String, CaseIterable, Identifiable, Sendable {
 /// `mdta` is the QuickTime metadata keyspace, which permits reverse-DNS keys of
 /// our own. It is the only keyspace that does, and .mov files support it.
 enum ClipMetadata {
-    static let ballSizeIdentifier =
+    // Computed and explicitly nonisolated, not stored. A `static let` here
+    // would inherit the project's MainActor default isolation and could not
+    // be read from the capture queue, which is exactly where it is needed.
+    // Same reason CaptureConfig's properties are marked nonisolated above.
+
+    nonisolated static var ballSizeIdentifier: AVMetadataIdentifier {
         AVMetadataIdentifier("mdta/com.rocket.GoalKick.ballSize")
-    static let ballDiameterIdentifier =
+    }
+
+    nonisolated static var ballDiameterIdentifier: AVMetadataIdentifier {
         AVMetadataIdentifier("mdta/com.rocket.GoalKick.ballDiameterMillimetres")
+    }
 
     /// Movie-level metadata describing the ball, to be handed to the movie
     /// output *before* recording starts. Set afterwards it has no effect.

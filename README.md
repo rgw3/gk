@@ -8,20 +8,22 @@ That is the goal, not the current state. See Status.
 
 ## Status
 
-Early development. **Everything around the measurement works. The measurement itself does not exist yet.**
+Early development. **The app captures and reviews. The measurement works, but only as Python on a Mac, and its accuracy is not yet established.**
 
 | Area | State |
 |---|---|
 | High frame rate capture | Working, verified on device |
+| Ball size recorded per clip | Working on device; metadata round-trip unconfirmed |
 | Clip storage in the app's own library | Working, verified on device |
 | Getting clips off the device | Working, verified on device |
-| Video review and frame stepping | Working, verified on device |
-| Ball tracking | Not started |
-| Metrics | Not started |
-| Ball size input | Does not exist — see below |
-| Flight model for carry distance | Undecided — see below |
+| Video review, frame stepping, zoom, telestration | Working, verified on device |
+| Ball detection and tracking | Working — Mac-side Python only |
+| Metrics (velocity, angle, carry, apex) | Written — Mac-side Python only, accuracy unresolved |
+| Any measurement inside the app | Not started |
 
-**Two of Deliverable 1's inputs are still missing, not merely unimplemented.** The app has no way to be told the ball's size, which scale calibration requires. And no decision has been made on whether carry distance and max height come from a drag-free parabola or a model with air resistance — for a ball leaving the foot at ~30 m/s those differ by roughly a factor of two, so it is not a detail.
+**Ball detection works.** A stock COCO object detector finds the ball in every frame of a real kick, with no training data and no assumptions about its colour. That was the project's largest technical unknown and it is answered.
+
+**The metrics are not yet trustworthy.** The pipeline fits gravity from the data as an independent check — nothing tells it that gravity is 9.81 — and across four runs it has come back between 3.5 and 12.3 m/s². The scatter straddles the true value rather than falling consistently short, so the method appears correct but imprecise. The dominant error is depth, which is recovered from the ball's apparent size; the fix is filming square to the kick, and it has not yet been tried.
 
 `project_notes.md` in this repository is the single source of truth for decisions, current state, and open questions. Read it before changing anything.
 
@@ -32,6 +34,7 @@ Early development. **Everything around the measurement works. The measurement it
 - **A physical iPhone.** The Simulator has no camera, exposes no real capture formats, and cannot validate any capture work. Playback work can be validated in the Simulator.
 - Optionally an iPad, for review on a larger screen. The app is universal and needs no separate build configuration.
 - An Apple ID for code signing. A free Personal Team is sufficient; builds signed that way stop launching after 7 days and must be re-run from Xcode.
+- For the analysis pipeline only: Python with `tools/requirements.txt` installed. Not needed to build or run the app.
 
 ## Running it
 
@@ -51,9 +54,21 @@ Early development. **Everything around the measurement works. The measurement it
 **Scale calibration.** Real-world distance is recovered from the ball's apparent pixel diameter, which requires the camera's focal length in pixels. Two routes exist:
 
 - The per-frame **intrinsic matrix**, which gives true focal length under current focus. Measured across all 70 formats on the iPhone's back camera: 66 support it, and the 4 that do not are exactly the four 240 fps formats. Intrinsics and 240 fps are mutually exclusive.
-- **Field of view**, published for every format including the 240 fps ones, giving `fx = (imageWidth / 2) / tan(fieldOfView / 2)`. Nominal rather than measured, but a goal kick is filmed at 20–40 m where the lens sits at effectively infinite focus.
+- **Field of view**, published for every format including the 240 fps ones, giving `fx = (imageWidth / 2) / tan(fieldOfView / 2)`. Nominal rather than measured.
 
 Field of view is the route actually in use, since the intrinsic matrix is delivered only to a live capture session and is not stored in a recorded movie file.
+
+**The ball's size is recorded into each clip twice** — as a filename token and as QuickTime metadata inside the movie. Both survive an AirDrop; a sidecar file would not. The metadata is authoritative, because the two can only disagree if someone renames the file, and renaming damages the filename while leaving the metadata intact.
+
+## What gets measured, and what gets computed
+
+Only **launch conditions** are measured. Velocity and launch angle are fully determined in the first fraction of a second after contact. Carry distance and max height are then *computed* from those, which is what "theoretical carry distance" means — the ball never has to be filmed landing.
+
+That distinction resolves what would otherwise be an impossible framing problem. Covering a 40 m flight means standing ~27 m back, where a size 4 ball is under 10 pixels wide at 1080p and the diameter estimate collapses. Filming only the launch allows standing 5–12 m away, where the ball is 26–52 pixels.
+
+Both flight models are computed and shown side by side — a drag-free parabola and RK4 integration with air resistance. The gap between them is the honest answer: it shows how much of the figure is physics and how much is assumption. Spin is ignored, so there is no Magnus force; a ball struck with backspin carries further than either model predicts.
+
+**How a kick must be filmed** matters as much as the code. Camera held steady with no deliberate pan, 5–12 m away, within ±15° of perpendicular to the kick, and the ball stationary in frame beforehand — a ball at rest gives the sharpest diameter measurement available, and it makes contact detectable automatically. None of this is yet enforced or checked by the app.
 
 **Frame rates are not what they claim.** Recorded files report 239.9 and 119.9 fps — the NTSC-derived rates of 240 ÷ 1.001 and 120 ÷ 1.001. `nominalFrameRate` is a label, not a measurement, so Δt must always come from each frame's presentation timestamp.
 
@@ -73,15 +88,30 @@ Playback with pause, 1×, 1/2, 1/4, and 1/8 speed, frame-accurate stepping in bo
 
 **1/8 is the rate at which a 240 fps clip shows every frame** — 240 ÷ 8 = 30 displayed per second. At 1× the display physically cannot show all 240, so the reviewer is not seeing everything that was recorded. The equivalent for 4K/120 is 1/4.
 
+**Pinch to zoom** up to 8× with pan, and double-tap to zoom to the point you tapped. Zoom holds while stepping frames and changing speed — that combination is the point, since zooming to the plant foot and then stepping through contact is how a coach shows a kicker what actually happened.
+
+**Telestration.** Draw yellow lines over the video with a finger, Apple Pencil or stylus; they hold position while the clip plays. Strokes are stored as fractions of the video picture rather than as screen coordinates, so a circle drawn around the plant foot stays on it through zoom, pan and rotation. Not saved — annotations are lost when the clip changes.
+
 The app is universal, and review is intended for an iPad, where a coach can show a kicker their own technique on a screen big enough to see it.
+
+## Analysis pipeline
+
+Measurement is being developed as Python on the Mac before anything is ported to Swift, because the feasibility question is separable from learning the platform and the iteration loop is seconds rather than a device rebuild.
+
+- `tools/extract_frames.py` — verify real frame timing, locate the kick, dump frames
+- `tools/detect_ball.py` — YOLO detection, background registration, continuity gating; writes a per-frame CSV
+- `tools/compute_metrics.py` — 3D reconstruction, trajectory fit, both flight models
+
+Nothing here ships. It is a spike whose findings port to Vision, Core ML and Accelerate, and it is constrained accordingly: only detector models small enough for the Neural Engine, and no technique without an Apple equivalent.
 
 ## Project layout
 
 - `ContentView.swift` — tab bar container
-- `RecordView.swift` — capture screen: live preview, configuration picker, record button
-- `Recorder.swift` — `CaptureConfig`, `ClipStore`, capture session, format selection, orientation, recording, file verification
-- `ReviewView.swift` — playback controller, transport, scrubbing, looping, frame stepping, clip browser
+- `RecordView.swift` — capture screen: live preview, configuration picker, ball size picker, record button
+- `Recorder.swift` — `CaptureConfig`, `BallSize`, `ClipMetadata`, `ClipStore`, capture session, format selection, orientation, recording, file verification
+- `ReviewView.swift` — playback controller, transport, scrubbing, looping, frame stepping, zoom, telestration, clip browser
 - `Info.plist` — only the Info keys Xcode's `INFOPLIST_KEY_*` allowlist cannot express; everything else is generated from build settings
+- `tools/` — the Mac-side Python pipeline, deliberately outside `GoalKick/` so Xcode's synchronized folders do not sweep it into the app target
 - `project_notes.md` — decisions, current state, open questions
 
 ## Terminology
@@ -90,6 +120,8 @@ The person using the app is the **coach**. The goalkeeper being measured is the 
 
 ## Tech stack
 
-Native Swift and SwiftUI, with AVFoundation for capture and playback, CoreMotion for camera attitude, and Vision for tracking (planned). No third-party dependencies.
+Native Swift and SwiftUI, with AVFoundation for capture and playback, CoreMotion for camera attitude, and Vision plus a Core ML detector for tracking. No third-party dependencies in the app.
+
+Ball detection uses a pre-trained COCO model rather than Vision's object tracker. A tracker follows an appearance you hand it, so it needs seeding and inherits whatever that seed looked like; a detector generalises across ball colours for nothing.
 
 Native was not a preference. Deliverable 1 depends on high frame rate capture, camera optics data for scale calibration, frame-accurate playback stepping, and per-frame presentation timestamps — none of which are reachable from a web or cross-platform stack.

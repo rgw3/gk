@@ -73,6 +73,7 @@ The coach should be able to do the following with the video:
   - 1/4
 - Step through the video frame by frame using advance and reverse buttons
 - Pinch to zoom into the picture, and pan around while zoomed
+- Draw yellow lines over the video with a finger, Apple Pencil or stylus, which stay in place while the clip plays. A button to turn drawing on and off, and a button to clear.
 
 **Clips are stored inside the app, in its own Documents directory. Nothing is written to Photos.** What is stored is the raw capture — not a version with tracking or metrics rendered onto it. Exporting to Photos is out of scope for now.
 
@@ -141,11 +142,11 @@ None of this is built. The app offers no framing guidance and performs no compli
 
 **The metrics are not yet trustworthy even on the Mac.** The pipeline runs end to end and produces plausible-looking numbers, but its own gravity self-check fails — see *The gravity discrepancy* under Open Questions. Until that is understood, no figure it produces should be shown to anyone.
 
-**Pinch to zoom is unbuilt**, and is part of Deliverable 1.
+**No filming guardrail is enforced or checked.** The app gives the coach no framing guidance and does not verify afterwards whether the shot was square, steady, or at a sensible distance — despite those being what makes the measurement work at all. The measurements needed for the check already exist in the Mac pipeline; nothing surfaces them.
 
-**No filming guardrail is enforced or checked.** The app gives the coach no framing guidance and does not verify afterwards whether the shot was square, steady, or at a sensible distance — despite those being what makes the measurement work at all.
+**Annotations are not saved.** Telestration strokes live only in memory and are lost when the clip changes or the app quits. There is no undo, one colour, one thickness.
 
-**The test targets remain empty.** No test has been written for either the Swift app or the Python tools.
+**The test targets remain empty.** No test has been written for either the Swift app or the Python tools. The pipeline has never been run against data with a known answer — see *Next Steps*.
 
 ### What is done
 
@@ -157,7 +158,9 @@ Each of these is verified on hardware, not merely written. Details are in the se
 | **Video review screen** | Every playback control Deliverable 1 asks for, plus 1/8 speed, restart, scrubbing, section looping, and reverse playback beyond the requirement. |
 | **Clip transfer off the device** | File sharing exposes `Documents/` in the Files app, and AirDrop moves clips to the iPad or the Mac with frame timing intact. |
 | **iPad as the review device** | No port was needed. The app was already universal and the review screen required no layout changes. |
-| **Ball size capture** | A `BallSize` picker on the Record screen, written into every clip twice: as a filename token and as `mdta` metadata inside the movie. Both survive AirDrop, which a sidecar file would not. **Written but not yet verified on hardware.** |
+| **Ball size capture** | A `BallSize` picker on the Record screen, written into every clip twice: as a filename token and as `mdta` metadata inside the movie. Both survive AirDrop, which a sidecar file would not. Builds and runs on device; **the metadata round-trip has not been confirmed from a real recording.** |
+| **Pinch to zoom in Review** | Up to 8×, with pan, double-tap to zoom to a tapped point, and a persistent badge that resets. Built on `UIScrollView`. Verified on device. |
+| **Telestration** | Yellow strokes over the video that hold position while the clip plays, with on/off and clear buttons. Strokes are stored normalised to the picture, so they track the video through zoom, pan and rotation. Verified on device. |
 | **First footage** | Ten clips, 2026-08-21. Five at 1080p/240, five at 4K/120. Documented under *Open Questions → How should a goal kick be filmed?* |
 | **Step 3 — ball tracking** | Done, on the Mac. A stock `yolo11n` finds the ball in 100% of frames across the flight, with continuity gating to reject the cones it grabs once the ball reaches the net. Output is the per-frame table Step 3 asked for. |
 | **Step 4 — metrics** | Written, on the Mac. Produces speed, launch angle, carry and apex, with both flight models side by side. **The numbers do not yet pass their own self-check.** |
@@ -189,7 +192,7 @@ Build, sign, install, and launch are confirmed working on both devices. Getting 
 | `ContentView.swift` | Tab bar container only. Two tabs: **Record** and **Review**. |
 | `RecordView.swift` | Capture screen: live preview, configuration picker, ball size picker, record button |
 | `Recorder.swift` | `CaptureConfig`, `BallSize`, `ClipMetadata`, `ClipStore`, capture session, format selection, orientation, recording, file verification |
-| `ReviewView.swift` | Playback controller, transport, scrubbing, looping, frame stepping, clip browser |
+| `ReviewView.swift` | `ReviewPlayer` (transport, scrubbing, looping, frame stepping), `DrawingCanvasView`, `ZoomingScrollView`, `ZoomableVideoView`, clip browser, review screen |
 | `Info.plist` | Only the Info keys the `INFOPLIST_KEY_*` allowlist cannot express — currently `UIFileSharingEnabled` alone. Everything else is still generated by `GENERATE_INFOPLIST_FILE` and merged at build time. Do not duplicate generated keys here. |
 
 **The project uses Xcode 16+ synchronized folders** (`PBXFileSystemSynchronizedRootGroup`), so files added to `GoalKick/` join the target automatically with no project-file surgery. `Info.plist` is the one deliberate exception: it carries a `membershipExceptions` entry excluding it from the target, because otherwise the folder copies it into the bundle as a resource while `ProcessInfoPlistFile` generates one at the same path, and the build fails with **"Multiple commands produce … GoalKick.app/Info"**. That exception is what Xcode itself writes when target membership is unticked in the File Inspector.
@@ -210,6 +213,8 @@ Measurement is being developed in Python on the Mac before anything is ported to
 | `tools/requirements.txt` | `opencv-python`, `numpy`, `ultralytics` |
 
 **The CSV is the interface between detection and physics**, so the arithmetic can be re-run in a second without paying for the model again.
+
+**`--imgsz` defaults to the clip's own width**, so nothing is thrown away before the detector sees it. This is not a minor setting: the model resizes each frame before looking at it, and a downscale degrades the ball's apparent diameter, which is what every distance in the pipeline rests on. Measured on one 4K clip, going from 0.33× to 0.50× cut range scatter from 200 mm to 118 mm. Native 4K is slow; `--imgsz 1920` is the quicker, coarser option.
 
 **Environment:** Python 3.14 with `tools/.venv`. PyTorch and OpenCV wheels resolved on 3.14 without needing an older interpreter.
 
@@ -304,7 +309,19 @@ All verified on the device:
 - Continuous reverse playback at the selected speed. `canPlayReverse` is true for these clips, so the encoding supports backwards decode and no codec change is needed.
 - Controls overlay the video and auto-hide after 3 seconds, so the picture fills the screen in both orientations. They never auto-hide when no clip is loaded, or the "Choose clip" button would vanish with no way back.
 
-**Pinch to zoom is part of Deliverable 1 and is not built.** The review screen offers no zoom and no pan. Its value is in combination with frame stepping: zooming to the ball and the plant foot and then stepping frame by frame is how a coach shows a kicker what their technique actually did — at full-frame scale on a phone, the ball is too small for that to land. Zoom must persist across frame stepping, speed changes and scrubbing rather than resetting, or the gesture becomes useless for the thing it is for. Two known design points: the gesture has to coexist with the controls overlay that auto-hides after 3 seconds, and zoom affects review only — measurement reads the stored pixels, never the display transform.
+**Pinch to zoom, up to 8×, with pan.** Double-tap zooms to 3× centred on the tapped point rather than on the middle of the screen, because the coach is pointing at the ball. Zoom holds across frame stepping, speed changes and scrubbing — that combination is the point of the feature — and resets on rotation and on loading a new clip.
+
+Built on `UIScrollView` rather than SwiftUI's `MagnifyGesture` and `DragGesture`. Zooming is more than a scale factor: the pan must stay inside the content, the gestures must compose without fighting, and letting go should settle rather than stop dead. UIKit has done all of that for years, and reimplementing it in gesture callbacks means reimplementing its edge cases too.
+
+The subview sizing lives in `layoutSubviews`, not `updateUIView`, because SwiftUI runs `updateUIView` on *state* changes — which is not necessarily after it has decided how big the view is. On first appearance the bounds can still be zero.
+
+**Telestration: yellow strokes that hold position while the clip plays.** A permanently visible two-button cluster at top-left toggles drawing and clears. It is deliberately not in the auto-hiding panel: drawing is a mode, and a mode the coach cannot see they are in is a trap — they would drag the video, nothing would happen, and there would be no clue why. While drawing is on, pan, pinch and tap-to-toggle-controls are all disabled, so a one-finger drag is unambiguously a line.
+
+**Strokes are stored as fractions of the video picture, not as screen coordinates.** A point is kept as (0.5, 0.5) meaning the middle of the picture, whatever the zoom, the orientation, or the size of the letterbox bars. Screen coordinates would have been less code and quietly wrong: a circle drawn around the plant foot would slide off it the moment the coach zoomed, and turning the phone would scatter every line. Line width is normalised the same way, so a stroke drawn at 3× does not become a fat band at 1×. The canvas is a subview of the zooming view, so the scroll view's transform carries the strokes along with the picture for free.
+
+Coalesced touches are read on every move. Apple Pencil reports far faster than the screen refreshes, and ignoring the in-between samples turns a smooth arc into visible straight segments.
+
+**Both features are presentation only.** Measurement reads the stored pixels; neither zoom nor annotation changes any number.
 
 **1/8 is the rate at which a 240 fps clip shows every frame.** 240 ÷ 8 = 30 frames displayed per second. At 1× the display physically cannot show all 240, so frames are dropped and the reviewer is not seeing everything that was recorded. The equivalent for 4K/120 is 1/4. Slower than that repeats frames rather than revealing new ones.
 
@@ -330,19 +347,21 @@ Completed work is recorded under *Current State → What is done*. This section 
 
 Steps 3 and 4 are written and running on the Mac. What follows is what remains.
 
-**Step 5 — Resolve the gravity discrepancy.** This blocks everything else and is described in full under *Open Questions*. The pipeline's own self-check says the reconstructed trajectory is not a ballistic one, so no metric it produces can be believed yet. Immediate action: run the remaining nine clips, especially the 4K ones where the ball is twice the size and depth noise roughly halves, and see whether the deficit is specific to one clip or systematic in the method.
+**Step 5 — Establish measurement accuracy.** The pipeline runs and is probably correct, but its precision is poor and unquantified — see *The gravity discrepancy*. Three things feed into this, in rough order of value:
+
+1. **Film properly square footage.** The first ten clips are short-range strikes into a net from ~4 m at 9–17° off perpendicular. They are excellent tracker development footage and poor physics validation footage. A square shot removes the depth cross-term that currently dominates the error. A filming protocol is recorded under *How should a goal kick be filmed?*
+2. **Build a synthetic validation harness.** Every debugging session so far has lacked a known answer. Generating a ballistic trajectory with chosen parameters, projecting it through the pinhole model, and feeding it to `compute_metrics.py` would establish whether the maths is right independently of any footage — and would turn the noise tolerance and the ±15° guardrail from arguments into measured curves. It would also compare 1080p against 4K on the *same* kick, which no single-phone filming session can do.
+3. **Run the remaining clips at native resolution.** Ten data points rather than three, at the setting that matters.
 
 Done when a real kick reconstructs with fitted gravity near 9.81 m/s² without being told what gravity is.
 
-**Step 6 — Verify the ball size selector on hardware.** It is written but has never been run. Record a clip and confirm the status panel reads `· ball 206.1 mm` rather than `BALL SIZE MISSING` — that is the metadata round-trip, and it is the half of the two-copy scheme that cannot be checked by looking at filenames in Files.
+**Step 6 — Verify the ball size metadata on hardware.** The picker builds and runs, but no recording has been checked. Record a clip and confirm the status panel reads `· ball 206.1 mm` rather than `BALL SIZE MISSING`. That is the half of the two-copy scheme that cannot be checked by looking at filenames in Files.
 
-**Step 7 — Port the pipeline to the app.** Export the detector to Core ML, drive it through `VNCoreMLRequest`, replace OpenCV registration with the Vision equivalents, and reimplement the trajectory fit in Swift. Not to be started before Step 5 succeeds; porting a pipeline that produces wrong numbers would only make the wrong numbers harder to debug.
+**Step 7 — Port the pipeline to the app.** Export the detector to Core ML, drive it through `VNCoreMLRequest`, replace OpenCV registration with the Vision equivalents, and reimplement the trajectory fit in Swift. Not to be started before Step 5; porting a pipeline whose accuracy is unknown would only make its errors harder to find.
 
-**Step 8 — Pinch to zoom in Review.** Part of Deliverable 1, unbuilt. See *Current State → Review*.
+**Step 8 — Filming guardrails in the app.** Framing guidance before the kick, and a compliance check afterwards. The check is cheap and concrete: the ball's diameter trend across the flight measures how far off perpendicular the shot was, and background registration already measures camera movement. Both numbers exist in the Mac pipeline; nothing surfaces them to the coach.
 
-**Step 9 — Filming guardrails in the app.** Framing guidance before the kick, and a compliance check afterwards. The check is now cheap and concrete: the ball's diameter trend across the flight measures how far off perpendicular the shot was, and the background registration already measures camera movement. Both numbers exist; nothing surfaces them to the coach.
-
-**Also outstanding: film properly square footage.** The first ten clips are short-range strikes into a net from ~4 m at ~11° off perpendicular. They are excellent for developing the tracker and poor for validating the physics.
+**Step 9 — A results screen.** Nothing in the app displays a metric. Whatever it shows must label carry and apex as theoretical, and should surface the quality signals — off-square angle, camera drift, fitted gravity — rather than presenting a bare number as though it were certain.
 
 ### Optional, not scheduled
 
@@ -360,6 +379,8 @@ Two clip-transfer refinements are **available but unbuilt**, since the manual pa
 **This cannot be settled by filming the same kick both ways.** One phone runs one format at a time, so a single kick cannot be recorded at 1080p/240 and 4K/120 simultaneously. Comparing configurations means comparing sets of kicks in aggregate, or using two devices. The first session produced five of each, which are different kicks.
 
 **The pipeline now measures the thing that decides this.** `compute_metrics.py` reports range scatter about the fitted trend and fitted gravity, both of which degrade with depth noise. Running the same analysis across the 1080p and 4K sets answers the question empirically rather than by argument.
+
+**One comparison has been run and it was not valid.** At `--imgsz 1280`, 1080p showed 3.7% relative diameter scatter against 4K's 4.4%, suggesting 4K was no better. But that setting downscales a 1920-wide frame by 0.67× and a 3840-wide frame by 0.33× — 4K was handicapped by twice as much. A fair test needs both at native resolution, which is now the default. **The question remains open.**
 
 **Pixels on the ball, and why filming distance dominates accuracy**
 
@@ -430,24 +451,37 @@ Camera distance should be paced out and recorded in future sessions. It is the d
 
 **The gravity discrepancy — the largest open problem in the project**
 
-`compute_metrics.py` fits gravity from the data rather than assuming it. Nothing tells the fit that gravity is 9.81; the value falls out of the pixel scale, the frame timestamps and the 3D reconstruction alone. **On the first clip it comes out at 3.49 m/s², 64% low.** Until that is understood, every metric the pipeline produces is void.
+`compute_metrics.py` fits gravity from the data rather than assuming it. Nothing tells the fit that gravity is 9.81; the value falls out of the pixel scale, the frame timestamps and the 3D reconstruction alone. It is the only independent check the pipeline has, and it does not yet land reliably.
 
-What is established:
+**Diagnosis: the estimator is noisy, not biased.** Four runs:
 
-- **It is not the flight window.** Contact detection and boot-phase exclusion were both corrected; the fit runs from frame 548 to 580, clear of the boot and clear of the net.
-- **It is not camera shake.** Background registration shifts the ball by ~1 px and reports drift flat to within 0.1 px across the fitted frames.
-- **It is not the flat-plane assumption alone.** Correcting that raised gravity from −0.16 to 3.49. It was part of the problem, not all of it.
-- **The vertical motion is the wrong shape.** Averaged over 16 frames each, the ball rises at **6.53 px/frame early and 6.75 px/frame late**. It accelerates upward. Free flight forbids this; gravity can only slow a rise. Expected late value was ~6.0 px/frame allowing for perspective.
+| Clip | Detector input | Fitted gravity | Off-square | Range scatter |
+|---|---|---|---|---|
+| c1 · 1080p | 1280 px | 3.49 | 11.0° | 84 mm |
+| c2 · 1080p | 1280 px | 12.29 | 17.0° | 106 mm |
+| c6 · 4K | 1280 px | 7.49 | 9.4° | 200 mm |
+| c6 · 4K | **1920 px** | **8.86** | 16.5° | **118 mm** |
 
-The inconsistency, stated precisely: **the kinematics require the ball to be closing on the camera by ~25% across the flight; measured diameter says 5%.** Both cannot be true.
+They straddle 9.81 rather than all falling short, and c2 comes out 25% *high* — which no perspective bias can produce. With a spread of about ±4.4 across three clips the standard error is ~2.5, so 9.81 sits comfortably inside it. A systematic modelling error would push every clip the same way.
 
-Candidate explanations, none confirmed:
+**The mechanism is identified.** Writing `u` for the ball's vertical image position relative to the principal point:
 
-- **Diameter is biased by the background.** In the late frames the ball is in front of dark netting rather than grass, and a detector box may grow spuriously at that boundary. This is the leading suspect and would produce exactly this signature.
-- **Backspin.** A ball struck with heavy backspin gets an upward Magnus force, which at 13 m/s could offset perhaps 25–30% of gravity. Real, and insufficient — it cannot explain a 64% deficit, and cannot produce *acceleration*.
-- **A systematic vertical drift in the detector box** as the ball crosses from grass to net to sky.
+```
+Y = −u·Z/fx      →      Ÿ = −(ü·Z + 2·u̇·Ż)/fx
+```
 
-**Next diagnostic, cheap and unwritten:** run the remaining nine clips. If gravity lands near 9.81 on any of them, the fault is specific to this clip. If all nine show the same deficit, it is systematic in the method. The 4K clips are the more informative test, since twice the pixels across the ball roughly halves the depth noise that the whole 3D reconstruction rests on.
+The quadratic term the fit calls "gravity" has two contributors: real image curvature, and a **cross-term between vertical image speed and range rate**. For c2 that cross-term is `2·(−1320)·(−2.95)/1260` = **+6.18 m/s²** against a measured 12.29. Half the reading comes from the depth slope, which is the noisiest quantity in the pipeline.
+
+So gravity is not being measured from ballistic curvature alone — it is partly read off a noisy estimate of how fast the ball approaches the camera.
+
+**Two levers follow, both demonstrated:**
+
+- **Square filming.** If `vz ≈ 0` the cross-term vanishes. All ten existing clips are 9–17° off perpendicular, consistently angled toward the camera — evidently where the coach naturally stands. This is the single largest accuracy lever available and it costs nothing.
+- **Detector input resolution.** Raising `--imgsz` from 1280 to 1920 on the *same* 4K clip cut range scatter from 200 mm to 118 mm and moved gravity from 7.49 to 8.86 — the first "good" verdict the check has produced. Nothing about the physics changed; only how much of the ball the model was shown. `--imgsz` now defaults to the clip's own width.
+
+What is ruled out: the flight window (contact detection and boot-phase exclusion were both corrected), camera shake (registration shifts the ball ~1 px and reports drift flat across the fitted frames), and the flat-plane assumption alone (correcting it moved c1 from −0.16 to 3.49 — part of the problem, not all of it).
+
+**Still unexplained on c1 specifically:** averaged over 16 frames each, the ball rises at 6.53 px/frame early and 6.75 px/frame late. It accelerates upward, which free flight forbids. The kinematics would require the ball to be closing on the camera by ~25% while measured diameter says 5%. The leading suspect is diameter bias — in the late frames the ball sits in front of dark netting rather than grass, where a detector box may grow spuriously. Backspin gives a real upward Magnus force, but at 13 m/s it could offset perhaps 25–30% of gravity and cannot produce acceleration.
 
 Establish a repeatable protocol as filming continues, and record it here, so later footage is comparable with earlier footage.
 
