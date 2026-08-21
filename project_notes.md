@@ -97,7 +97,7 @@ The app is built as a **native iOS app in Swift**. This is decided. The requirem
 
 **Scale calibration:** the known ball diameter plus the camera's **focal length in pixels** is how real-world distance is recovered from apparent pixel size. Focal length is the hard requirement; the intrinsic matrix is only one of two ways to obtain it.
 
-- **Intrinsic matrix** — delivered per frame, gives true focal length under current focus plus the optical center. Better, but unavailable at 240 fps on the test device.
+- **Intrinsic matrix** — delivered per frame, gives true focal length under current focus plus the optical center. Better, but unavailable at 240 fps on the iPhone, and delivered only to a live capture session rather than stored in the recorded file.
 - **Field of view** — `AVCaptureDevice.Format.videoFieldOfView` is published for every format, including the 240 fps ones. Focal length follows as `fx = (imageWidth / 2) / tan(fieldOfView / 2)`. Nominal rather than measured, but a goal kick is filmed at 20–40 m where the lens is effectively at infinity focus, so the nominal value is accurate.
 
 **Known technical risk:** motion blur on a fast-moving ball at high frame rates may defeat Vision's built-in tracker and force a trained Core ML detector. The stack above supports either path.
