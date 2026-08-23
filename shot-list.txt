@@ -23,23 +23,30 @@ HOW TO FRAME IT
    edge it is going to travel AWAY from.
 8. Most of the screen should be the direction the ball is heading,
    not the space behind the kicker.
+9. LOOK AT WHAT ELSE IS IN SHOT. Move every spare ball out of the
+   picture, or well behind the one being kicked. A bag of balls on
+   the touchline or a game on the next pitch will be found instead
+   of yours. See WHY THREE OF THESE MATTER below.
 
 
 EACH KICK
 
-9.  Ball sits STILL and in frame for at least 3 seconds first.
-10. Start recording early. Stop recording late.
-11. Hold the phone still. DO NOT PAN. Let the ball fly out of frame.
-12. Ball must fly free. No net, no wall, nothing stopping it.
+10. Ball sits STILL and in frame for at least 3 seconds first.
+11. Start recording early. Stop recording late.
+12. Hold the phone still. DO NOT PAN. Let the ball fly out of frame.
+13. Ball must fly free. No net, no wall, nothing stopping it.
+14. Keep recording until the ball has BOUNCED at least once. The
+    bounce is how the app knows where the flight ended.
 
 
 WHAT TO SHOOT
 
-13. Five kicks at 1080p / 240.
-14. Five kicks at 4K / 120.
-15. For at least 3 of those kicks, PACE OUT WHERE THE BALL FIRST
+15. Five kicks at 1080p / 240.
+16. Five kicks at 4K / 120. CHECK the setting between blocks - last
+    time it came out three and eight instead of five and five.
+17. For at least 3 of those kicks, PACE OUT WHERE THE BALL FIRST
     LANDS and write it down next to the clip time.
-16. One extra kick with yourself deliberately at an angle, about
+18. One extra kick with yourself deliberately at an angle, about
     30 degrees off to the side. This one is a test.
 
 
@@ -52,15 +59,23 @@ DO NOT
 - Do not forget to set the ball size in the app.
 
 
-WHY TWO OF THESE MATTER
+WHY THREE OF THESE MATTER
 
-Item 15 is the most valuable thing here. The app works out carry
-distance from physics, and nothing has ever checked that number
-against reality. Pacing out where the ball actually lands is the
-only way to find out whether the drag model is any good. Paces are
-fine - counting the same way every time matters more than accuracy.
+Item 9 cost a whole session. On 22 August the pitch had a bag of
+spare balls on the touchline and another game two pitches over.
+The software found one of those instead of the ball being kicked
+in nine clips out of eleven, and the tracks looked perfect while
+measuring a ball 25 metres away. It picks the NEAREST ball now,
+which is right as long as nothing rolls closer than yours.
 
-Item 16 is a control. The app should flag that clip as off-square
+Item 17 is the most valuable thing here. The app works out carry
+distance from physics, and until 22 August nothing had ever
+checked that number against reality. Pacing out where the ball
+actually lands is the only way to find out whether the drag model
+is any good. Paces are fine - counting the same way every time
+matters more than accuracy.
+
+Item 18 is a control. The app should flag that clip as off-square
 and its gravity check should get worse in a predictable way. If it
 does not, the warning is broken and we need to know.
 

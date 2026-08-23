@@ -19,12 +19,16 @@ Early development. **The app captures and reviews. The measurement works, but on
 | Video review, frame stepping, zoom, telestration | Working, verified on device |
 | Importing and sharing clips | Built, not yet verified on device |
 | Ball detection and tracking | Working — Mac-side Python only |
-| Metrics (velocity, angle, carry, apex) | Written — Mac-side Python only, accuracy unresolved |
+| Metrics (velocity, angle, carry, apex) | Written — Mac-side Python only, verified on one clip of eleven |
 | Any measurement inside the app | Not started |
 
-**Ball detection works.** A stock COCO object detector finds the ball in every frame of a real kick, with no training data and no assumptions about its colour. That was the project's largest technical unknown and it is answered.
+**Ball detection works.** A stock COCO object detector finds footballs with no training data and no assumptions about colour. The hard part turned out not to be detection but deciding *which* football matters — a pitch in use has several, and on one session a bag of spares on the touchline was tracked instead of the ball being kicked, in nine clips out of eleven. Acquisition now takes the nearest ball, which is the one the coach stood 10 yards from.
 
-**The metrics are not yet trustworthy.** The pipeline fits gravity from the data as an independent check — nothing tells it that gravity is 9.81 — and across four runs it has come back between 3.5 and 12.3 m/s². The scatter straddles the true value rather than falling consistently short, so the method appears correct but imprecise. The dominant error is depth, which is recovered from the ball's apparent size; the fix is filming square to the kick, and it has not yet been tried.
+**The self-check passes, on one clip so far.** The pipeline fits gravity from the data as an independent test — nothing tells it that gravity is 9.81 — and it now returns **9.66 m/s²**, within 1.5%, with a 3.2 mm vertical residual. Computed carry on that clip lands within about 5% of a distance paced out on the pitch, which is the first time any number this project produced has been checked against reality.
+
+**The cause of the earlier failures was the fit running past the end of the flight** — through the bounce and the roll — which turns a parabola into very nearly a straight line and reports gravity near zero. The flight is now cut at the bounce automatically.
+
+**Ten more clips are still to be processed**, so this is one measurement rather than an accuracy figure. Nothing should be presented to a coach yet.
 
 `project_notes.md` in this repository is the single source of truth for decisions, current state, and open questions. Read it before changing anything.
 
@@ -69,7 +73,9 @@ That distinction resolves what would otherwise be an impossible framing problem.
 
 Both flight models are computed and shown side by side — a drag-free parabola and RK4 integration with air resistance. The gap between them is the honest answer: it shows how much of the figure is physics and how much is assumption. Spin is ignored, so there is no Magnus force; a ball struck with backspin carries further than either model predicts.
 
-**How a kick must be filmed** matters as much as the code. Camera held steady with no deliberate pan, 5–12 m away, within ±15° of perpendicular to the kick, and the ball stationary in frame beforehand — a ball at rest gives the sharpest diameter measurement available, and it makes contact detectable automatically. None of this is yet enforced or checked by the app.
+Although carry is computed rather than observed, **the fit must still stop where free flight does.** Running it through the bounce and the roll flattens the trajectory into nearly a straight line and reports gravity near zero — that was the pipeline's longest-standing defect. The landing is now found from the reversal in the ball's vertical image position and the fit is cut there.
+
+**How a kick must be filmed** matters as much as the code. Camera held steady with no deliberate pan, 5–12 m away, within ±15° of perpendicular to the kick, and the ball stationary in frame beforehand — a ball at rest gives the sharpest diameter measurement available, and it makes contact detectable automatically. One more rule was learned the hard way: no other footballs in shot, or none nearer than the one being kicked. `shot-list.txt` in this repository is the field version. None of it is yet enforced or checked by the app.
 
 **Frame rates are not what they claim.** Recorded files report 239.9 and 119.9 fps — the NTSC-derived rates of 240 ÷ 1.001 and 120 ÷ 1.001. `nominalFrameRate` is a label, not a measurement, so Δt must always come from each frame's presentation timestamp.
 
@@ -107,7 +113,11 @@ Measurement is being developed as Python on the Mac before anything is ported to
 
 - `tools/extract_frames.py` — verify real frame timing, locate the kick, dump frames
 - `tools/detect_ball.py` — YOLO detection, background registration, continuity gating; writes a per-frame CSV
-- `tools/compute_metrics.py` — 3D reconstruction, trajectory fit, both flight models
+- `tools/compute_metrics.py` — 3D reconstruction, trajectory fit, landing detection, both flight models
+
+The CSV is the interface between detection and physics, so the arithmetic can be re-run in a second without paying for the model again.
+
+**A quick way to tell whether a run is real:** check the implied range against where the camera actually stood. A size 4 ball at 9.1 m is 28 pixels at 1080p and 57 at 4K. A track reporting 20–31 m from a camera at 9 m has locked onto a different ball, however confident and however tidy its statistics look.
 
 Nothing here ships. It is a spike whose findings port to Vision, Core ML and Accelerate, and it is constrained accordingly: only detector models small enough for the Neural Engine, and no technique without an Apple equivalent.
 

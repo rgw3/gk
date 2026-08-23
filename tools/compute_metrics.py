@@ -96,6 +96,49 @@ def find_contact(samples: list[dict], threshold_fraction: float,
     return 0
 
 
+def find_landing(samples: list[dict], sustain: int) -> int | None:
+    """Index of the frame where the ball first reaches the ground, or None.
+
+    Free flight ends at the bounce. What follows is a different problem --
+    a bounce, a roll, a ball being collected -- and fitting one parabola
+    across that boundary is not a small error. On the 30-degree control kick
+    of 2026-08-22 the fit ran through two bounces and the roll and reported
+    gravity as 1.37 m/s^2 with a 222 mm vertical residual. Cut at the bounce,
+    the same detections gave 9.66 m/s^2 and 3.2 mm. Nothing else changed.
+
+    The landing is found in image space, not from physics. Vertical image
+    position falls to the apex, climbs back as the ball descends, and then
+    reverses when the ball bounces. That turning point is the ground, and
+    finding it this way needs no scale, no focal length and no depth -- all
+    of which are noisier than the pixel row the ball sits on.
+
+    The reversal has to be sustained, for the same reason contact does: a
+    single frame of the box twitching is noise, and truncating the flight on
+    noise costs more than the frames it saves.
+    """
+    if len(samples) < sustain + 3:
+        return None
+
+    heights = [s["v"] for s in samples]
+    apex = min(range(len(heights)), key=heights.__getitem__)
+    if apex >= len(heights) - 1:
+        return None
+
+    # Image y grows downward, so the largest v is the lowest point on screen.
+    lowest = max(range(apex + 1, len(heights)), key=heights.__getitem__)
+
+    after = heights[lowest + 1:lowest + 1 + sustain]
+    if len(after) < sustain:
+        # The ball never came back up: it left the frame still descending, or
+        # the track ended at the ground. Either way there is nothing to cut,
+        # and guessing would throw away real flight.
+        return None
+
+    if all(height < heights[lowest] for height in after):
+        return lowest
+    return None
+
+
 def reconstruct(samples: list[dict], ball_metres: float, fx: float,
                 principal: tuple[float, float]):
     """Recover true 3D position per frame from image position and diameter.
@@ -239,8 +282,13 @@ def report(args) -> None:
 
     stationary = samples[:contact]
     flight = samples[contact + args.skip_frames:]
+    landing = None
     if args.last_frame is not None:
         flight = [s for s in flight if s["frame"] <= args.last_frame]
+    elif not args.keep_after_landing:
+        landing = find_landing(flight, args.landing_sustain)
+        if landing is not None:
+            flight = flight[:landing + 1]
 
     if len(flight) < 8:
         sys.exit(
@@ -262,6 +310,16 @@ def report(args) -> None:
     print(f"  Flight fitted over  {len(flight)} frames, "
           f"f{flight[0]['frame']} to f{flight[-1]['frame']} "
           f"({t[-1]:.4f} s)")
+    if landing is not None:
+        print(f"  Landing detected at frame {flight[-1]['frame']} "
+              f"-- samples after it are the bounce, and are excluded")
+    elif args.last_frame is None and not args.keep_after_landing:
+        print("  No landing found     the ball is still descending at the end "
+              "of the track;")
+        print("                       if it in fact lands, the fit is running "
+              "past it -- check")
+        print("                       the gravity self-check below before "
+              "trusting anything")
     print()
 
     print("GEOMETRY")
@@ -381,7 +439,15 @@ def build_parser() -> argparse.ArgumentParser:
                              "still deforming against the boot (default 3)")
     parser.add_argument("--last-frame", type=int, default=None,
                         help="ignore samples after this frame, for excluding "
-                             "a ball that has reached a net")
+                             "a ball that has reached a net; overrides the "
+                             "automatic landing cut")
+    parser.add_argument("--landing-sustain", type=int, default=4,
+                        help="frames the ball must keep rising after the "
+                             "lowest point before that point is called a "
+                             "landing (default 4)")
+    parser.add_argument("--keep-after-landing", action="store_true",
+                        help="fit the whole track, bounce and roll included; "
+                             "for seeing what the landing cut is worth")
 
     parser.add_argument("--square-warning", type=float, default=15.0,
                         help="warn beyond this many degrees off perpendicular "

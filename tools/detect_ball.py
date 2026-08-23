@@ -233,7 +233,19 @@ class Track:
         A candidate a third the size of the established ball is a different
         object however plausible its position.
 
-    The first detection is taken on trust; there is nothing to compare it to.
+    The first detection is the largest candidate, not the most confident.
+    The ball being measured is the one the coach stood 10 yards from, so it
+    is the nearest object in shot and therefore the biggest. Everything else
+    a pitch offers -- the bag of spare balls on the touchline, the next age
+    group's game two pitches over -- is further away and smaller.
+
+    This is not a tie-breaker, it is the whole acquisition rule, and it was
+    learned the hard way. Taking the detector's own ranking picked a ball
+    25 m away in nine clips out of eleven, because a distant ball sitting
+    still is crisper than a near one and scores higher for it. Worse, the
+    size gate below then locked around that wrong ball, so the real one was
+    rejected as the wrong size for the rest of the clip -- a track that
+    looks immaculate and measures nothing.
     """
 
     def __init__(self, max_jump: float, diameter_tolerance: float):
@@ -271,7 +283,10 @@ class Track:
             return None, "no-detection"
 
         if not self.accepted:
-            chosen = candidates[0]
+            # Largest, not first. See the class docstring -- the detector's
+            # ranking is by confidence, and confidence favours the distant
+            # stationary ball over the near one we actually came to measure.
+            chosen = max(candidates, key=lambda c: c["diameter"])
             chosen["frame"] = frame
             self.accepted.append(chosen)
             return chosen, "ok"
@@ -548,9 +563,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--diameter-tolerance", type=float, default=1.6,
                         help="largest factor by which a candidate's diameter "
                              "may differ from the established ball (default 1.6)")
-    parser.add_argument("--max-gap", type=int, default=10,
+    # 30 rather than 10, because the ball is genuinely unfindable for a
+    # moment as it comes off the boot: blurred, half behind the kicker's
+    # leg, and accelerating hardest. Measured on a real kick at 4K/120 the
+    # blackout ran twelve frames, and a limit of 10 ended the track inside
+    # it -- discarding the entire flight to save a tenth of a second.
+    parser.add_argument("--max-gap", type=int, default=30,
                         help="stop after this many consecutive frames with no "
-                             "plausible ball (default 10)")
+                             "plausible ball (default 30)")
 
     parser.add_argument("--no-stabilise", dest="stabilise", action="store_false",
                         help="skip background registration; use this to see "
