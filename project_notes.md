@@ -371,7 +371,9 @@ Done when a real kick reconstructs with fitted gravity near 9.81 m/s² without b
 - **The ball size metadata.** The picker builds and runs, but no recording has been checked. Record a clip and confirm the status panel reads `· ball 206.1 mm` rather than `BALL SIZE MISSING`. That is the half of the two-copy scheme that cannot be checked by looking at filenames in Files.
 - **Import and share in the clip browser.** Built in response to the AirDrop trouble and never exercised. Import a `.mov` from Files, and share one out.
 
-**Step 6b — Settle the Photos question.** Run a 1080p/240 clip through Photos by the same route the 4K/120 clip survived, and probe it. That single number decides whether *Should Photos be reconsidered as the store?* stays open. It is cheap and it removes a large uncertainty from the project's foundations.
+**Step 6b — Measure what Photos does to 240 fps.** Run a 1080p/240 clip through Photos by the same route the 4K/120 clip survived, and probe it.
+
+The store question no longer depends on this — `Documents/Clips/` stays on its own merits, for the reasons under *Should Photos be reconsidered as the store?*. The test is still worth running, but the reason has changed: it tells us what an **import probe** will encounter when a coach brings in a clip that has passed through Photos. That probe has to exist anyway for external footage, and this is the case it most needs to catch.
 
 **Step 7 — Port the pipeline to the app.** Export the detector to Core ML, drive it through `VNCoreMLRequest`, replace OpenCV registration with the Vision equivalents, and reimplement the trajectory fit in Swift. Not to be started before Step 5; porting a pipeline whose accuracy is unknown would only make its errors harder to find.
 
@@ -383,7 +385,38 @@ Done when a real kick reconstructs with fitted gravity near 9.81 m/s² without b
 
 Both clip-transfer refinements once listed here — a `ShareLink` in the clip browser, and `CFBundleDocumentTypes` plus `onOpenURL` — **have been built**, along with an Import button that was not anticipated. They moved out of this section the moment the Files detour became irritating in real use, which is what this section said should trigger them. See *Getting clips off the device*.
 
-Nothing else is currently parked here.
+**Telestration colour picker.** Today every stroke is yellow. Add a picker so the coach can change colour mid-session — one mark for the plant foot, another for the ball's path, without them reading as the same annotation.
+
+**The palette is chosen for contrast against turf, not for familiarity:** yellow, white, cyan, magenta. Green and blue were requested and rejected on the pitch test — green vanishes against grass, which is the only background this app ever has, and blue is weak in low light and against dark kit. Red was rejected too: it collides with the training cones already in frame. The colours that survive are the ones no football pitch contains.
+
+Two consequences to settle before this is built, both of which reach further than the feature itself:
+
+- **A stroke must carry its own colour.** Strokes are currently normalised to the picture with a single implicit colour. Adding a per-stroke colour field changes the stroke model, and the same model is what *Annotations are not saved* will have to persist. Settle the field first; migrating a saved format afterwards costs more.
+- **The picker belongs in the always-visible cluster.** Colour is a mode in the same way drawing is, and the current colour must be legible at a glance or the coach draws the wrong one. That puts it alongside the drawing toggle and clear button rather than in the auto-hiding panel — a corner already competing with the zoom badge. The layout question is real and is the reason this is not a one-line change.
+
+**Move configuration off the Record screen.** The capture screen carries a live preview, a configuration picker, a ball size picker and a record button, and it is too crowded. To be revisited once the measurement mechanics are settled — the UI is not what is being proven right now.
+
+The constraint that shapes any redesign: **ball size is not a setting and cannot be moved to a preferences page.** It is per-clip data captured at record time, for the reason recorded under *How does the app learn the ball's size?* — a setting describes the app's state now, not the state when a clip was filmed. Capture configuration is the same. Both must stay verifiable at the moment of capture.
+
+The pattern that fits is the one Apple's Camera app uses for `4K • 60`, and that Halide and Kino use over the viewfinder: **a single always-visible status line — `1080p·240 · Size 4` — that expands into a sheet on tap.** Genuine app preferences go behind a gear; preview and record button get the rest of the screen. Filmic Pro's dense bar of expandable pods is the counter-example to avoid.
+
+That status line is a correctness feature, not tidiness. A clip whose ball size is unknown is not measurable at all, and `BALL SIZE MISSING` is a failure that has to be caught before the kick, not after.
+
+**A clip info panel in Review, and footage the app did not record.** A coach may be sent video from a source outside the app — a GoPro on the far post, a clip emailed from another parent. Review should show what a clip actually is, and the app should be able to measure footage it did not capture.
+
+**Do not ask the user for what the file already knows.** Resolution, duration and rotation come from `AVAsset`; real frame timing comes from walking sample presentation timestamps with `AVAssetReader`, which is what `tools/extract_frames.py probe` does on the Mac. `nominalFrameRate` is a label and must not be trusted — see *Capture*. The panel can populate itself.
+
+**The blocker is not metadata, it is focal length.** Every distance in the pipeline comes from `fx`, and `fx` comes from `AVCaptureDevice.Format.videoFieldOfView` — an API that exists only because the app ran the capture session. For a clip from another camera there is no field of view to read, and without it apparent ball size cannot be converted into range. Three routes, in increasing order of interest:
+
+- A lens preset library (GoPro Hero 12 Wide → known FOV). Practical, but a maintenance burden, and a user who picks the wrong mode gets confidently wrong numbers.
+- Maker metadata from the file. GoPro writes GPMF telemetry, but this is device-specific and fragile.
+- **Calibration from a known reference in the scene.** A measured length in the ground plane — cones at a known spacing, the goal width, the penalty box — solves for scale without knowing the lens at all. It works for any camera ever made, and the 2026-08-22 session already filmed cones at 5 yards for exactly this kind of cross-check.
+
+**Two hazards specific to action cameras:** wide modes carry heavy barrel distortion, and in-camera stabilisation such as GoPro's HyperSmooth applies the same non-rigid warp that this project disables on the iPhone for corrupting geometry. It has to be off at the camera, and the app cannot enforce that — only warn.
+
+**Other kicks: passing, goalkeeper punts, drop kicks, goal kicks from the ground.** Deliberately out of scope until the goal kick works end to end.
+
+Most of the pipeline is kick-agnostic — it measures a ball's launch conditions and does not care what produced them. What changes per kick type is the filming guardrail, the expected speed and angle ranges, and therefore the sanity checks. One case does not fit the model at all: **a ground pass may have no ballistic phase**, so carry and apex are meaningless for it and a rolling ball needs different physics entirely.
 
 ## Open Questions
 
@@ -472,7 +505,19 @@ The second gap is subtler and matters as much. Both tests move a *file* through 
 - **iCloud "Optimize Storage"** can replace a local original with a smaller proxy and fetch the real one on demand. On a pitch with no signal that is a clip which cannot be analysed.
 - **Photos presents the slow-motion version**, so what the coach sees and what the analysis reads would be different assets. That is a class of bug that hides well.
 
-**Decision for now:** `Documents/Clips/` stays. Revisit when the 240 fps test has been run.
+**A second, stronger argument has since been raised: ingest, not sync.** The original case for Photos was that it would move clips to the iPad automatically. The better case is that a coach may be *sent* footage — emailed a clip filmed on a GoPro or another parent's phone — and needs a way to get it in. See *A clip info panel in Review* under *Optional, not scheduled*.
+
+**How comparable apps resolve this: both, with distinct roles.** Photos and Files are import sources and export destinations; the app keeps its own working store. Hudl Technique, OnForm, Coach's Eye and LumaFusion all accept video from anywhere and then **copy it into an internal library they control**. Import copies, it never references — which is precisely what avoids the two traps identified above, since a copied file cannot be swapped for an iCloud proxy and cannot be silently served as a slow-motion rendition.
+
+Read that way the question largely dissolves, and the answer keeps the current architecture:
+
+- **`Documents/Clips/` stays as the store.** Photos becomes a third *import source*, alongside the Files picker and the share-sheet path already built.
+- **The ingest problem is mostly solved already.** A coach emailed a clip can save it to Files and use Import, or share it straight into GoalKick via `CFBundleDocumentTypes`. A Photos picker is incremental convenience rather than an architectural change.
+- **Probe presentation timestamps on every import, whatever the source, and warn when timing looks retimed.** This is needed for external footage regardless, so one check covers Photos slow-motion, GoPro clips, and anything that has been through a messaging app. It converts the retiming hazard from a reason to avoid Photos into a thing the app detects.
+
+**On monetization:** restricting input to in-app recording was considered as a way to make the app worth buying, and rejected. The value is in the measurement pipeline, not in owning the capture path; every comparable app monetizes analysis, team management and cloud sharing while accepting footage from anywhere. Locking the input narrows where the app is useful without defending the part that is hard to build. Moot in the near term regardless — App Store distribution needs the paid Developer Program, and this project is on a free Personal Team.
+
+**Decision for now:** `Documents/Clips/` stays as the store, and that is now settled on its merits rather than pending a test. What remains open is only whether Photos is added as an *import source*, and the 240 fps retiming test is still worth running because it tells us what an import probe will encounter.
 
 **How should a goal kick be filmed?**
 

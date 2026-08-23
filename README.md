@@ -79,7 +79,9 @@ Both flight models are computed and shown side by side — a drag-free parabola 
 
 This is not a preference. Saving a 240 fps clip to Photos makes iOS classify it as slow motion, and reading it back returns a **30 fps** file — every frame present, but timestamps 8× too far apart. Δt would read 1/30 s instead of 1/240 s, making every velocity 8× too slow with no visible symptom. Photos is not a safe store for measurement footage, so the app owns its own.
 
-**This decision is currently under review.** A 4K/120 clip has since round-tripped through Photos with its timing intact, which the original test did not predict. The 240 fps case — the one that failed — has not been retested, and neither has the path where the app itself writes to Photos and reads back. `project_notes.md` has the detail. Storage stays in `Documents/` until that is settled.
+**The app's own directory stays the store, and that is settled.** The pattern comparable apps use — Hudl Technique, OnForm, LumaFusion — is both, with distinct roles: Photos and Files are import sources and export destinations, while the app keeps a working library it controls. Import copies a file in rather than referencing it, which is what stops an iCloud proxy or a slow-motion rendition being served in place of the original.
+
+**What is still open is whether Photos is added as an import source**, and whether a 240 fps clip survives a round trip through it. `project_notes.md` has the detail.
 
 **To get clips off the device, use the cable.** Finder → the device under *Locations* → the **Files** tab → *GoalKick → Clips* → drag them out. Byte for byte, nothing to discover, works for iPhone and iPad alike.
 
