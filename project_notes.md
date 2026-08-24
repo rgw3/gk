@@ -103,6 +103,26 @@ The app is built as a **native iOS app in Swift**. This is decided. The requirem
 - **Intrinsic matrix** — delivered per frame, gives true focal length under current focus plus the optical center. Better, but unavailable at 240 fps on the iPhone, and delivered only to a live capture session rather than stored in the recorded file.
 - **Field of view** — `AVCaptureDevice.Format.videoFieldOfView` is published for every format, including the 240 fps ones. Focal length follows as `fx = (imageWidth / 2) / tan(fieldOfView / 2)`. Nominal rather than measured, but a goal kick is filmed at 20–40 m where the lens is effectively at infinity focus, so the nominal value is accurate.
 
+### Porting risks — audited 2026-08-24
+
+**Everything in Deliverable 1 must run in Swift on an iPhone or iPad.** The Mac pipeline is a spike, so what matters is not whether it works but whether it survives the move. Audited against the code as it actually stands:
+
+**The physics ports cleanly.** `compute_metrics.py` uses no OpenCV at all — it is pure numpy, and every call has an Accelerate equivalent: `polyfit` and `linalg.lstsq` map to LAPACK `dgels`, and `median`, `std`, `mean` and `dot` to vDSP. The RK4 integration, the Gauss-Newton drag fit with its numerical Jacobian, and the landing detection are plain arithmetic on arrays — perhaps 150 lines of Swift, running in milliseconds on a hundred samples. Nothing here is a risk.
+
+**The app will be better than the Mac in one respect.** `compute_metrics.py` hardcodes `fx` as 1260 or 2520 from an assumed 74.6° field of view. The app has `AVCaptureDevice.Format.videoFieldOfView` at capture time and can write the true value into each clip, exactly as it already does for ball size. That removes an assumption rather than porting one.
+
+**The largest risk is native-resolution inference.** `--imgsz` defaults to the clip's own width — 3840 for 4K — because diameter precision is what every distance rests on. A Core ML YOLO export normally takes 640 × 640; 3840 is **36× the pixels**, roughly 88 MB of input tensor in float16 before activations. It may run at a few hundred milliseconds a frame, but it is the least device-friendly thing in the pipeline and the accuracy work depends on it.
+
+**A better on-device architecture exists and has not been tried:** acquire once on a full frame, then run inference on a small crop around the predicted position for every frame after. Same effective resolution on the ball at a fraction of the compute, and it fits the tracker's existing predict-then-match structure. It would likely be faster *and* more accurate than what the Mac does. Worth testing on the Mac before porting, since it changes what gets ported.
+
+**Two things must be re-validated after export, not before.** The distance gate's 1.3 factor and the 1.6 diameter tolerance are properties of how the detector draws boxes. So, more importantly, is the diameter bias described under *The gravity discrepancy* — which is why Step 7 now comes before the rest of Step 5.
+
+**Registration is unverified.** The Mac uses Shi-Tomasi features, Lucas-Kanade optical flow and a RANSAC affine estimate. `VNTranslationalImageRegistrationRequest` is a *different algorithm*, not a reimplementation. Drift of 250–390 px is currently being corrected on real clips, so this matters; equivalent in intent, unproven in effect.
+
+**Camera distance is now a required per-clip input.** The acquisition gate needs the distance the coach paced out. That means a control on the Record screen beside the ball size picker, captured per clip for the same reason ball size is — it describes the clip, not the app. This requirement did not exist before 2026-08-24 and nothing in the app provides it.
+
+**Coaches cannot pass flags.** Defaults carried 9 of 11 clips on the 2026-08-22 set, which is respectable, but two failed and the app has no way to say so intelligibly. Whatever ships must either work on defaults or explain itself.
+
 **Known technical risk, partially measured:** motion blur on a fast-moving ball may defeat Vision's built-in tracker and force a trained Core ML detector. First footage (2026-08-21, bright sun, ball at ~13 m/s) shows **no meaningful blur** — panel detail is legible on a ball ~70 px across at 240 fps. This retires the risk at that speed and in that light only. A real goal kick at ~30 m/s smears roughly 2.3× further per exposure, and overcast light lengthens exposure further, so the risk stands for the footage that actually matters.
 
 **On Swift 6:** the decision to stay in Swift 5 mode stands, and was reconsidered deliberately after capture was working rather than allowed to lapse. Strict concurrency turns data-race issues into hard compile errors, and the next phase — passing `CMSampleBuffer` and `CVPixelBuffer` to Vision — is the worst area for that friction, since neither type is `Sendable` and the annotations are Apple's to fix, not ours. `SWIFT_VERSION` is a single build setting, so migrating later costs the same work on a more settled design. Revisit once tracking works.
@@ -143,7 +163,7 @@ None of the filming guardrails is built. The app offers no framing guidance and 
 
 **There is no measurement code in the app.** Detection, tracking and metrics exist only as Python on the Mac (see *Analysis pipeline*). The iOS app still captures, stores and reviews; it computes nothing. Nothing has been ported, and no Core ML model has been exported.
 
-**The metrics are not yet trustworthy even on the Mac, but the reason is now known.** The pipeline's gravity self-check failed for most of the project's life because the fit ran past the end of free flight. With that corrected, one clip fits gravity to 9.66 m/s² — 1.5% from true — and its computed carry sits within about 5% of a paced distance. Ten more clips were still being processed when work stopped on 2026-08-23. **One clip is not an accuracy figure**, so no number should be shown to anyone yet, but the reason has changed from "unexplained" to "unverified".
+**The metrics are half-validated.** The reconstruction is confirmed: on every clip whose track reaches the ground, observed displacement matches a paced landing to within 3–10%. The flight fit is not: gravity averages 8.3 against 9.81, from a known cause — a progressive bias in the detector's flight diameters, detailed under *The gravity discrepancy*. **No figure should be shown to a coach yet**, but the open question is now a specific measurable defect rather than a mystery.
 
 **No filming guardrail is enforced or checked.** The app gives the coach no framing guidance and does not verify afterwards whether the shot was square, steady, or at a sensible distance — despite those being what makes the measurement work at all. The measurements needed for the check already exist in the Mac pipeline; nothing surfaces them.
 
@@ -166,8 +186,10 @@ Each of these is verified on hardware, not merely written. Details are in the se
 | **Telestration** | Yellow strokes over the video that hold position while the clip plays, with on/off and clear buttons. Strokes are stored normalised to the picture, so they track the video through zoom, pan and rotation. Verified on device. |
 | **First footage** | Ten clips, 2026-08-21. Five at 1080p/240, five at 4K/120. Documented under *Open Questions → How should a goal kick be filmed?* |
 | **Step 3 — ball tracking** | Done, on the Mac. A stock `yolo11n` finds the ball across the flight with no training data. Acquisition takes the largest candidate rather than the most confident, which is what stops it locking onto other people's footballs elsewhere on the pitch; `--max-gap` is 30 frames so the blur blackout off the boot does not end the track. Output is the per-frame table Step 3 asked for. |
-| **Step 4 — metrics** | Written, on the Mac. Produces speed, launch angle, carry and apex, with both flight models side by side, and cuts the fit at the bounce automatically. **Passes its own gravity self-check on the one clip run since that fix; the rest are unverified.** |
+| **Step 4 — metrics** | Written, on the Mac. Produces speed, launch angle, carry and apex, with both flight models side by side, cuts the fit at the bounce automatically, and fits launch conditions against the drag ODE rather than a parabola. Nine of eleven clips produce sound numbers. |
 | **Ground truth** | Eleven kicks filmed 2026-08-22 with paced landing distances, camera at 10 yards, cones at a measured 5 yards. The first data in the project's history against which a computed carry can be checked at all. |
+| **Reconstruction validated** | On every clip whose track reaches the ground, observed displacement matches the paced landing to within **3–10%**. Focal length from field of view, ball diameter as scale, per-frame depth and 3D geometry confirmed against a distance measured on the pitch rather than against themselves. |
+| **Portability audited** | 2026-08-24. The maths ports to Accelerate with no OpenCV dependency; the detector path carries the real risk. Recorded under *Porting risks*. |
 
 ### Environment
 
@@ -226,7 +248,17 @@ This is the whole acquisition rule rather than a tie-breaker, and it was learned
 
 **Raising `--confidence` does not help here**, because the distractors are genuine footballs detected at 0.9+. Size is the discriminator, not confidence.
 
-**`--max-gap` defaults to 30 frames, not 10.** The ball is genuinely unfindable for a moment as it leaves the boot: blurred, partly behind the kicker's leg, and accelerating hardest. Measured at 4K/120 that blackout ran twelve frames, and a limit of 10 ended the track inside it — discarding the whole flight to save a tenth of a second.
+**`--max-gap` defaults to 30 frames, not 10.** The ball is genuinely unfindable for a moment as it leaves the boot: blurred, partly behind the kicker's leg, and accelerating hardest. Measured at 4K/120 that blackout ran twelve frames, and a limit of 10 ended the track inside it — discarding the whole flight to save a tenth of a second. Raising it beyond 30 buys nothing: at 90 the termination frames move out and every longest-unbroken segment stays identical, because by then the ball has left the frame.
+
+**`--camera-distance` gates acquisition on the distance the coach paced out.** Expected diameter follows from `fx · D / Z`, and a candidate more than a factor off that is a different ball whichever way it is wrong. Largest-candidate alone fixed seven clips and broke two in the other direction, latching onto a spare ball lying *nearer* the camera than the one being struck.
+
+Tolerance is **1.3**, not 1.5. At 1.5 a spare ball 6.8 m away measured 76.8 px against an expected 56.8 — inside a 38–85 px window, so the gate approved it. 1.3 excludes it while every correctly acquired clip sits between 55.7 and 57.9 px, and it still tolerates about 30% error in pacing.
+
+The gate applies **only at acquisition**. The ball recedes from 9 m to 24 m during one measured flight, so enforcing it throughout would throw the flight away; the continuity and size-ratio checks carry the track once it is locked.
+
+**`compute_metrics.py` cuts the fit at the landing and fits against drag.** `find_landing()` finds the reversal in vertical image position after the apex, working purely in image space so it needs no scale, focal length or depth. `fit_launch_with_drag()` integrates the drag ODE from a trial launch state and refines by Gauss-Newton with a numerical Jacobian — seven free parameters, gravity among them, because pinning gravity at 9.81 would trade away the only independent check the pipeline has. The drag-free parabola is still computed and printed alongside.
+
+**`--contact-threshold` defaults to 0.3 of peak speed, not 0.15.** A ball resting on grass is not motionless in the image: handheld drift ran 250–390 px across the 2026-08-22 clips, and what registration leaves behind clears a 15% bar for three frames. Two clips fired contact while the ball still sat there and fitted 400–550 frames of a stationary ball. 0.3 and 0.5 select the same contact frame on both, so this is a plateau rather than a tuned value.
 
 **`--imgsz` defaults to the clip's own width**, so nothing is thrown away before the detector sees it. This is not a minor setting: the model resizes each frame before looking at it, and a downscale degrades the ball's apparent diameter, which is what every distance in the pipeline rests on. Measured on one 4K clip, going from 0.33× to 0.50× cut range scatter from 200 mm to 118 mm. Native 4K is slow; `--imgsz 1920` is the quicker, coarser option.
 
@@ -372,29 +404,28 @@ Completed work is recorded under *Current State → What is done*. This section 
 
 Steps 3 and 4 are written and running on the Mac. What follows is what remains.
 
-**Step 5 — Establish measurement accuracy.** The blocking defect is fixed and one clip now reconstructs correctly. What remains is showing that it holds across the set.
+**Step 5 — Establish measurement accuracy.** Mostly done, and what remains has been deliberately deferred behind Step 7. Ten of eleven 2026-08-22 clips track the right ball and nine produce sound metrics, against two and zero before 2026-08-24.
 
-**Resume here.** Detection over all eleven 2026-08-22 clips was launched on 2026-08-23 and had not finished when work stopped. It writes `tools/frames/*-track.csv` and logs to `~/Desktop/detect-run-2.log`. Re-run it if the output is incomplete:
+**What was achieved.** On every clip whose track reaches the ground, observed displacement matches the paced landing to within 3–10%. That is the first end-to-end validation this project has had: focal length from field of view, ball diameter as scale, per-frame depth and 3D geometry, all confirmed against a distance measured on the pitch rather than against themselves.
+
+**What remains, and why it is blocked deliberately.** Fitted gravity still averages 8.3 rather than 9.81, and the cause is a progressive bias in the detector's flight diameters — see *The gravity discrepancy*. That bias belongs to the PyTorch model's bounding boxes. Core ML export changes the numerics, so measuring it now risks measuring it twice. **Step 7 therefore comes first.**
+
+Two things worth doing whenever this resumes:
+
+1. **A synthetic validation harness.** Every debugging session so far has lacked a known answer. Generating a ballistic trajectory with chosen parameters, projecting it through the pinhole model, and feeding it to `compute_metrics.py` would establish whether the maths is right independently of any footage — and would turn the noise tolerance and the ±15° guardrail from arguments into measured curves. It would also compare 1080p against 4K on the *same* kick, which no single-phone filming session can do. It would have caught the landing-window bug in an afternoon.
+2. **Two clips still fail and are not understood.** Kick 7 acquires for a single frame and collapses; kick 10 detects correctly but its track only starts near the end of the clip. Neither is diagnosed.
+
+**Reproducing the current results.** Detection, then metrics; the 4K clips need their dimensions passed:
 
 ```
-for f in $(ls -1 ~/Desktop/clips/*.mov | sort); do ./tools/.venv/bin/python tools/detect_ball.py "$f"; done
-```
+for f in $(ls -1 ~/Desktop/clips/*.mov | sort); do ./tools/.venv/bin/python tools/detect_ball.py "$f" --camera-distance 9.14; done
 
-Then the metrics, remembering that the 4K clips need their dimensions passed:
-
-```
 for c in tools/frames/*-track.csv; do case "$c" in *1080p240*) W=1920; H=1080;; *) W=3840; H=2160;; esac; ./tools/.venv/bin/python tools/compute_metrics.py "$c" --width $W --height $H --ball-size 4; done
 ```
 
-**Check each run against implied range before believing any metric.** If a clip reports the ball 20–31 m away when the camera stood at 9.1 m, it has locked onto someone else's football — see *Analysis pipeline*.
+**Check implied range before believing any metric.** If a clip reports the ball 20–31 m away when the camera stood at 9.1 m, it has locked onto someone else's football — see *Analysis pipeline*.
 
-What then feeds in, in rough order of value:
-
-1. **Compare computed carry against the paced landings.** Eleven kicks with measured distances now exist. This is the check the project has never been able to run, and it tests the flight model rather than just the reconstruction. Watch particularly whether drag-free or drag-corrected sits closer; on the one clip measured so far the drag-free figure was nearer, which would suggest Cd 0.25 is wrong through the drag crisis, as this document already suspects.
-2. **Build a synthetic validation harness.** Every debugging session so far has lacked a known answer. Generating a ballistic trajectory with chosen parameters, projecting it through the pinhole model, and feeding it to `compute_metrics.py` would establish whether the maths is right independently of any footage — and would turn the noise tolerance and the ±15° guardrail from arguments into measured curves. It would also compare 1080p against 4K on the *same* kick, which no single-phone filming session can do.
-3. **Settle whether `--skip-frames` needs to adapt.** Its default of 3 was not enough on the one clip analysed: the boot blackout ran twelve frames and the fit had to be started manually at the first frame with a real lock. If that recurs across the set, the rule should be derived rather than passed by hand each time.
-
-Done when the eleven clips reconstruct with fitted gravity clustered near 9.81 m/s² and computed carry tracking the paced distances, neither of which is told to the fit.
+**Five clips cannot be improved with this footage.** Their tracks end before the ball lands, and raising `--max-gap` to 90 pushed out the termination frames while leaving every longest-unbroken segment unchanged. Those balls leave the frame, which is precisely what `shot-list.txt` tells the coach to allow. That instruction is in tension with capturing the landing and the shot list has been amended.
 
 **Step 6 — Verify on hardware what is written but untested.** Two things, both quick:
 
@@ -405,7 +436,19 @@ Done when the eleven clips reconstruct with fitted gravity clustered near 9.81 m
 
 The store question no longer depends on this — `Documents/Clips/` stays on its own merits, for the reasons under *Should Photos be reconsidered as the store?*. The test is still worth running, but the reason has changed: it tells us what an **import probe** will encounter when a coach brings in a clip that has passed through Photos. That probe has to exist anyway for external footage, and this is the case it most needs to catch.
 
-**Step 7 — Port the pipeline to the app.** Export the detector to Core ML, drive it through `VNCoreMLRequest`, replace OpenCV registration with the Vision equivalents, and reimplement the trajectory fit in Swift. Not to be started before Step 5; porting a pipeline whose accuracy is unknown would only make its errors harder to find.
+**Step 7 — Port the pipeline to the app. This now comes before the rest of Step 5.** Export the detector to Core ML, drive it through `VNCoreMLRequest`, replace OpenCV registration with the Vision equivalents, and reimplement the trajectory fit in Swift.
+
+**The ordering was reversed deliberately on 2026-08-24 and the reasoning matters.** This step previously read "not to be started before Step 5; porting a pipeline whose accuracy is unknown would only make its errors harder to find." That was right while the unknown was the *physics*. It is no longer, because the physics is validated against paced landings and the one remaining defect is a property of the detector's bounding boxes — which Core ML export will change. Finishing the accuracy work on PyTorch boxes would mean measuring the same bias twice, the second time on the model that actually ships.
+
+Order of work, cheapest and most decisive first:
+
+1. **Export `yolo11n` to Core ML and confirm it detects the ball at all** on a known-good clip. Also settles whether the input resolution the accuracy work depends on is viable on device — see *Porting risks*.
+2. **Test acquire-then-crop inference**, which can be done on the Mac and may change what gets ported at all.
+3. **Re-measure the diameter bias on the exported model**, then finish Step 5 against boxes that will ship.
+4. **Port the maths.** Low risk: `compute_metrics.py` is pure numpy and every call has an Accelerate equivalent.
+5. **Replace registration with Vision** and check it against the OpenCV results on the same clips, since it is a different algorithm rather than a reimplementation.
+
+**Add a camera distance control to the Record screen** as part of this. The acquisition gate needs the distance the coach paced out, captured per clip beside the ball size for the same reason — it describes the clip, not the app.
 
 **Step 8 — Filming guardrails in the app.** Framing guidance before the kick, and a compliance check afterwards. The check is cheap and concrete: the ball's diameter trend across the flight measures how far off perpendicular the shot was, and background registration already measures camera movement. Both numbers exist in the Mac pipeline; nothing surfaces them to the coach.
 
@@ -582,11 +625,27 @@ Kick 11 is the deliberate off-square control the shot list called for — roughl
 
 **Two things this session established beyond the metrics.** The scale model checks out: the ball at rest measured 56.8 px against a predicted 56.8 px for a Size 4 at 10 yards through `fx` 2520, which is the first time focal length, ball diameter and a real measured distance have been confirmed to agree. And the cones, laid out at a known spacing, are an independent scale reference in the ground plane — useful in their own right, and the same technique that would let the app measure footage from a camera whose lens it knows nothing about.
 
-**What the session got wrong is worth keeping.** A pitch in normal use has other footballs on it — a bag of spares on the touchline, another age group playing alongside — and they defeated the detector before the acquisition rule was fixed. Filming guidance should say to look at what else is in frame, not only at the ball.
+**Results, as of 2026-08-24.** Ten of eleven clips track the right ball; nine produce sound metrics. Kick 7 acquires for a single frame and collapses; kick 10 detects correctly but its track starts near the end of the clip. Neither is diagnosed.
+
+| Kick | Speed | Fitted gravity | Landing captured |
+|---|---|---|---|
+| 1 | 13.75 m/s | 4.40 — suspect | no |
+| 2 | 12.55 m/s | 8.19 | **yes** |
+| 3 | 17.35 m/s | 7.42 | no |
+| 4 | 13.61 m/s | 8.31 | **yes** |
+| 5 | 16.03 m/s | 7.01 | no |
+| 6 | 12.85 m/s | **10.48** | **yes** |
+| 8 | 14.99 m/s | 6.79 — suspect | no |
+| 9 | 15.40 m/s | 7.74 | **yes** |
+| 11 | 14.93 m/s | **9.23** | no |
+
+**Only the four clips with a captured landing can be checked against the paced distance**, and all four match to within 3–10%. The rest lose the ball before it lands.
+
+**Two things this session got wrong are worth keeping.** A pitch in normal use has other footballs on it — a bag of spares on the touchline, another age group playing alongside — and they defeated the detector before the acquisition rule was fixed. And the instruction to let the ball fly out of frame, which is right for tracking, means the landing is never seen; validation footage needs a wider frame or more distance. Both are now in `shot-list.txt`.
 
 Camera distance is the dominant accuracy parameter (see *Pixels on the ball* above) and pacing it out, as was done here, should be standard.
 
-**The gravity discrepancy — cause identified, verification in progress**
+**The gravity discrepancy — two causes found, one fixed, one located**
 
 `compute_metrics.py` fits gravity from the data rather than assuming it. Nothing tells the fit that gravity is 9.81; the value falls out of the pixel scale, the frame timestamps and the 3D reconstruction alone. It is the only independent check the pipeline has, and for most of this project's life it did not land.
 
@@ -613,9 +672,38 @@ The quadratic term the fit calls "gravity" has two contributors: real image curv
 
 But the control kick was filmed **56.5° off perpendicular** — nearly four times the guardrail — with `vz` at +10.95 m/s, which is the most adverse geometry in the entire dataset. It fitted gravity to within 1.5% anyway. Whatever the cross-term costs, it is second order next to the window.
 
-**This rests on one clip.** Detection across the other ten was still running when work stopped on 2026-08-23. Until those are through, treat the conclusion as strongly indicated rather than settled, and treat 9.66 as one measurement rather than the pipeline's accuracy.
+**The whole set has since been run, and the window was not the only problem.** Fitted gravity across nine clips now clusters between 6.8 and 10.5, mean about **8.3** — far better than the old 3.5-to-12.3 spread, and still reading systematically low. What follows is what that residual bias turned out to be.
+
+**The vertical axis reads about 22% low while the horizontal validates.** On every clip whose track reaches the ground, observed displacement matches the paced landing to within 3–10%. The vertical does not, and the two share a range and a focal length.
+
+The fit is *internally* consistent, which is why this hid for so long: with `vy` and gravity both scaled down together, flight time `2·vy/g` is unchanged, so the duration agrees with the fit while both disagree with reality.
+
+**Four causes were tested and eliminated, in this order:**
+
+| Suspect | Verdict |
+|---|---|
+| Motion blur inflating the detector box | **Refuted** — the box *shrinks*, 58.4 → 42.9 px as confidence falls to 0.34 |
+| Air resistance biasing a drag-free fit | **Refuted** — fitting against the drag ODE moved gravity only 7.65 → 7.74 |
+| Camera tilt / wrong principal point | **Refuted** — gravity is provably invariant to `cy0`, which contributes `cy0·Z/fx`, and `Z` is linear in time, so it can only add a linear term |
+| Anchoring range to the resting diameter | **Tried and worse** — see below |
+
+**The cause is a progressive bias in the flight diameters.** Camera height recovered from the ball resting on the ground and again at landing —
+
+```
+h = D·(cy₁ − cy₂)/(d₁ − d₂)
+```
+
+— needs neither focal length nor principal point, and reads **1.10 m** across three clips against a phone held at about **1.4 m**. Working the geometry backwards on kick 9: the resting diameter is right (56.6 px, matching the paced 9.14 m to under 1%), while the landing diameter is under-read by 6.3% — 37.0 px where the flat-pitch constraint demands 39.5.
+
+So the detector's box degrades as the ball recedes and blurs. **The horizontal survives it because `X` uses `D/d` directly, where a 6% error stays 6%. The vertical goes through the range slope, where the cross-term `2·u̇·Ż/fx` amplifies it.** That is the same cross-term this document has named since the beginning — now with a cause rather than only a magnitude.
+
+**Anchoring the range line to the resting diameter followed obviously and was wrong.** A free fit spreads the flight bias between intercept and slope; anchoring the intercept forces the *slope* to absorb all of it, and the slope is what gravity is most sensitive to. Measured across the set it moved gravity the wrong way on nearly every clip — 8.13 → 6.11, 7.37 → 6.16, 7.01 → 6.25, 9.49 → 8.28 — while improving carry slightly. Kept as `--rest-anchor`, off by default, so the experiment can be repeated rather than re-argued.
+
+**Correcting the diameter bias itself is the remaining work, and it is deliberately not being done on the Mac.** The bias is a property of *this* detector's bounding boxes. A Core ML export changes the numerics — float16 on the Neural Engine, possibly different NMS — so characterising it here risks measuring it twice. See *Step 7*, which has been moved ahead of the rest of Step 5 for exactly this reason.
 
 **The earlier four-run table has been removed** rather than kept. Every figure in it was produced by fitting past the end of the flight, so the numbers measured the bug and not the footage. The one finding from it that survives on its own evidence is that detector input resolution matters: raising `--imgsz` from 1280 to 1920 on the same 4K clip cut range scatter from 200 mm to 118 mm. `--imgsz` now defaults to the clip's own width.
+
+**That default is load-bearing and may not survive the move to the device.** See *Porting risks* under Tech Stack — native-resolution inference is the least device-friendly thing in the pipeline, and diameter precision is what every distance rests on.
 
 **The c1 anomaly is superseded and needs re-measuring.** It was recorded here that on c1 the ball appeared to accelerate upward across the tracked frames, which free flight forbids, with diameter bias against dark netting as the leading suspect. That clip is a kick into a net and its window very likely included the ball striking it — the same class of error as the bounce, at a different obstacle. Re-run it with the landing cut before treating it as a separate mystery.
 

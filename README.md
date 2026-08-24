@@ -8,7 +8,7 @@ That is the goal, not the current state. See Status.
 
 ## Status
 
-Early development. **The app captures and reviews. The measurement works, but only as Python on a Mac, and its accuracy is not yet established.**
+Early development. **The app captures and reviews. The measurement works, but only as Python on a Mac — its reconstruction is now validated against distances paced on a pitch, while its flight fit carries a known, located bias.**
 
 | Area | State |
 |---|---|
@@ -18,17 +18,19 @@ Early development. **The app captures and reviews. The measurement works, but on
 | Getting clips off the device | Working, verified on device |
 | Video review, frame stepping, zoom, telestration | Working, verified on device |
 | Importing and sharing clips | Built, not yet verified on device |
-| Ball detection and tracking | Working — Mac-side Python only |
-| Metrics (velocity, angle, carry, apex) | Written — Mac-side Python only, verified on one clip of eleven |
+| Ball detection and tracking | Working on 10 of 11 test clips — Mac-side Python only |
+| Metrics (velocity, angle, carry, apex) | Written — Mac-side Python only; reconstruction validated, flight fit biased |
 | Any measurement inside the app | Not started |
 
 **Ball detection works.** A stock COCO object detector finds footballs with no training data and no assumptions about colour. The hard part turned out not to be detection but deciding *which* football matters — a pitch in use has several, and on one session a bag of spares on the touchline was tracked instead of the ball being kicked, in nine clips out of eleven. Acquisition now takes the nearest ball, which is the one the coach stood 10 yards from.
 
-**The self-check passes, on one clip so far.** The pipeline fits gravity from the data as an independent test — nothing tells it that gravity is 9.81 — and it now returns **9.66 m/s²**, within 1.5%, with a 3.2 mm vertical residual. Computed carry on that clip lands within about 5% of a distance paced out on the pitch, which is the first time any number this project produced has been checked against reality.
+**The reconstruction is validated against reality.** On every clip whose track reaches the ground, the observed displacement matches a distance paced out on the pitch to within **3–10%**. That confirms the whole measurement chain — focal length from field of view, ball diameter as scale, per-frame depth, 3D geometry — against an independent physical measurement rather than against itself.
 
-**The cause of the earlier failures was the fit running past the end of the flight** — through the bounce and the roll — which turns a parabola into very nearly a straight line and reports gravity near zero. The flight is now cut at the bounce automatically.
+**The flight fit is not yet right.** The pipeline fits gravity from the data as an independent test — nothing tells it that gravity is 9.81 — and it averages **8.3** across nine clips. The cause is known: the detector's bounding box under-reads the ball's diameter as it recedes and blurs, by about 6% at the landing. The horizontal axis absorbs that harmlessly; the vertical amplifies it through the range slope.
 
-**Ten more clips are still to be processed**, so this is one measurement rather than an accuracy figure. Nothing should be presented to a coach yet.
+Motion blur inflating the box, air resistance, camera tilt, and anchoring the range to the ball's resting size were each tested and each eliminated. Those negative results are recorded in `project_notes.md` and in the code.
+
+**Nothing should be presented to a coach yet.**
 
 `project_notes.md` in this repository is the single source of truth for decisions, current state, and open questions. Read it before changing anything.
 
@@ -120,6 +122,8 @@ The CSV is the interface between detection and physics, so the arithmetic can be
 **A quick way to tell whether a run is real:** check the implied range against where the camera actually stood. A size 4 ball at 9.1 m is 28 pixels at 1080p and 57 at 4K. A track reporting 20–31 m from a camera at 9 m has locked onto a different ball, however confident and however tidy its statistics look.
 
 Nothing here ships. It is a spike whose findings port to Vision, Core ML and Accelerate, and it is constrained accordingly: only detector models small enough for the Neural Engine, and no technique without an Apple equivalent.
+
+**Everything must eventually run in Swift on an iPhone or iPad**, so the spike was audited against that. `compute_metrics.py` uses no OpenCV — it is pure numpy, and every call maps to Accelerate — so the physics is low risk. The detector path is not: the pipeline runs inference at the clip's native width because diameter precision drives every distance, and 3840 px is 36× the pixels a Core ML YOLO export normally takes. `project_notes.md` has the full audit.
 
 ## Project layout
 

@@ -33,10 +33,10 @@ EACH KICK
 
 10. Ball sits STILL and in frame for at least 3 seconds first.
 11. Start recording early. Stop recording late.
-12. Hold the phone still. DO NOT PAN. Let the ball fly out of frame.
+12. Hold the phone still. DO NOT PAN.
 13. Ball must fly free. No net, no wall, nothing stopping it.
-14. Keep recording until the ball has BOUNCED at least once. The
-    bounce is how the app knows where the flight ended.
+14. The ball must still be IN FRAME when it first hits the ground.
+    Stand further back if it is not. See WHY FOUR OF THESE MATTER.
 
 
 WHAT TO SHOOT
@@ -59,7 +59,14 @@ DO NOT
 - Do not forget to set the ball size in the app.
 
 
-WHY THREE OF THESE MATTER
+WHY FOUR OF THESE MATTER
+
+Item 14 is new and it is the one that got away on 22 August. The
+software works out where the flight ended from the first bounce. On
+seven of eleven clips the ball left the frame before it landed, and
+those clips can never be checked against a paced distance - the
+measurement is only half a flight. Standing further back costs a
+little resolution on the ball and buys the whole trajectory.
 
 Item 9 cost a whole session. On 22 August the pitch had a bag of
 spare balls on the touchline and another game two pitches over.
