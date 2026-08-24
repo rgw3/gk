@@ -204,6 +204,113 @@ def fit_launch(t, x, y, z):
     }
 
 
+def _drag_derivative(state, k: float, gravity: float):
+    vx, vy, vz = state[3], state[4], state[5]
+    speed = math.sqrt(vx * vx + vy * vy + vz * vz)
+    return np.array([vx, vy, vz,
+                     -k * speed * vx,
+                     -gravity - k * speed * vy,
+                     -k * speed * vz])
+
+
+def _fly(state0, times, k: float, gravity: float, substeps: int = 4):
+    """Positions at each of `times`, integrating quadratic drag with RK4."""
+    out = np.empty((len(times), 3))
+    state = np.array(state0, dtype=float)
+    out[0] = state[:3]
+    for index in range(1, len(times)):
+        step = (times[index] - times[index - 1]) / substeps
+        for _ in range(substeps):
+            k1 = _drag_derivative(state, k, gravity)
+            k2 = _drag_derivative(state + step * k1 / 2, k, gravity)
+            k3 = _drag_derivative(state + step * k2 / 2, k, gravity)
+            k4 = _drag_derivative(state + step * k3, k, gravity)
+            state = state + step * (k1 + 2 * k2 + 2 * k3 + k4) / 6
+        out[index] = state[:3]
+    return out
+
+
+def fit_launch_with_drag(t, x, y, z, k: float, seed: dict,
+                         iterations: int = 20):
+    """Fit launch conditions against a trajectory that actually has drag.
+
+    `fit_launch` fits a parabola, which assumes the only force is gravity.
+    That is false and not by a little: a Size 4 ball at 14 m/s sees roughly
+    2.7 m/s^2 of drag, about 28% of g. Fitting a drag-free curve to a
+    drag-affected flight cannot recover 9.81, and measured across the
+    2026-08-22 set the parabola fit returned 8.31 on average -- low by 15%,
+    on every clip, in the same direction.
+
+    That bias does not stay in the self-check. Gravity and vertical launch
+    speed are correlated in a quadratic fit, so under-reading the curvature
+    under-reads vy with it; the flight model then launches that too-small vy
+    against true gravity and the ball lands early. It is why computed carry
+    ran ~22% short of paced landings while the *observed* track matched them
+    to within 3-10%.
+
+    Method is shooting: integrate from a trial launch state, compare against
+    every reconstructed sample, and refine by Gauss-Newton with a numerical
+    Jacobian. Seven free parameters -- launch position, launch velocity, and
+    gravity. Gravity stays free on purpose: it is the only independent check
+    this pipeline has, and fixing it at 9.81 would throw that away to make
+    the numbers look better.
+
+    Gauss-Newton rather than anything cleverer because `fit_launch` supplies
+    a good starting point and scipy is not a dependency. Step-halving guards
+    the case where a full step overshoots.
+    """
+    observed = np.column_stack([x, y, z])
+    params = np.array([x[0], y[0], z[0],
+                       seed["vx"], seed["vy"], seed["vz"], GRAVITY])
+
+    def residuals(values):
+        return (_fly(values[:6], t, k, values[6]) - observed).ravel()
+
+    current = residuals(params)
+    cost = float(current @ current)
+
+    for _ in range(iterations):
+        jacobian = np.empty((current.size, params.size))
+        for column in range(params.size):
+            nudge = max(abs(params[column]) * 1e-6, 1e-8)
+            bumped = params.copy()
+            bumped[column] += nudge
+            jacobian[:, column] = (residuals(bumped) - current) / nudge
+
+        try:
+            delta, *_ = np.linalg.lstsq(jacobian, -current, rcond=None)
+        except np.linalg.LinAlgError:
+            break
+
+        scale = 1.0
+        for _ in range(8):
+            trial = params + scale * delta
+            trial_residuals = residuals(trial)
+            trial_cost = float(trial_residuals @ trial_residuals)
+            if trial_cost < cost:
+                params, current, cost = trial, trial_residuals, trial_cost
+                break
+            scale /= 2
+        else:
+            break
+
+        if np.max(np.abs(scale * delta)) < 1e-9:
+            break
+
+    vx, vy, vz, gravity = params[3], params[4], params[5], params[6]
+    speed = math.sqrt(vx * vx + vy * vy + vz * vz)
+    horizontal = math.hypot(vx, vz)
+
+    return {
+        "speed": speed,
+        "elevation": math.degrees(math.atan2(vy, horizontal)),
+        "off_square": math.degrees(math.atan2(abs(vz), abs(vx))),
+        "vx": vx, "vy": vy, "vz": vz, "horizontal": horizontal,
+        "gravity": gravity,
+        "residual": float(np.sqrt(cost / observed.size)),
+    }
+
+
 def carry_drag_free(speed: float, angle_degrees: float, launch_height: float):
     """Closed-form parabola: no air, no spin, no assumptions beyond gravity."""
     angle = math.radians(angle_degrees)
@@ -297,7 +404,18 @@ def report(args) -> None:
         )
 
     t, x, y, z, raw_range, smoothed = reconstruct(flight, ball_metres, fx, principal)
-    fit = fit_launch(t, x, y, z)
+    parabola = fit_launch(t, x, y, z)
+
+    mass = args.ball_g if args.ball_g is not None else \
+        BALL_MASS_GRAMS.get(args.ball_size, 370.0)
+    drag_k = (0.5 * args.air_density * args.drag_coefficient
+              * math.pi * (ball_metres / 2) ** 2 / (mass / 1000.0))
+
+    fit = parabola
+    with_drag = None
+    if not args.no_drag_fit:
+        with_drag = fit_launch_with_drag(t, x, y, z, drag_k, parabola)
+        fit = with_drag
 
     print("=" * 64)
     print(f"  {args.track.name}")
@@ -344,13 +462,21 @@ def report(args) -> None:
         print("  only from apparent size, which is the noisiest input here.")
     print()
 
-    print("LAUNCH  (measured)")
+    label = "fitted with drag" if with_drag else "drag-free parabola fit"
+    print(f"LAUNCH  (measured, {label})")
     print(f"  Speed               {fit['speed']:.2f} m/s   "
           f"({fit['speed'] * 2.23694:.1f} mph, {fit['speed'] * 3.6:.1f} km/h)")
     print(f"  Launch angle        {fit['elevation']:.2f} degrees above horizontal")
     print(f"  Across view (vx)    {fit['vx']:+.2f} m/s")
     print(f"  Vertical   (vy)     {fit['vy']:+.2f} m/s")
     print(f"  Along view (vz)     {fit['vz']:+.2f} m/s")
+    if with_drag:
+        print()
+        print(f"  The drag-free parabola fit, kept for comparison, gives "
+              f"{parabola['speed']:.2f} m/s")
+        print(f"  at {parabola['elevation']:.2f} degrees. It assumes gravity is "
+              f"the only force,")
+        print(f"  which understates both -- see the self-check below.")
     print()
 
     print("SELF-CHECK")
@@ -361,6 +487,10 @@ def report(args) -> None:
     print(f"  Vertical residual   {fit['residual'] * 1000:.1f} mm RMS")
     print(f"  Range scatter       {float(np.std(raw_range - smoothed)) * 1000:.0f} mm "
           "about the fitted trend")
+    if with_drag:
+        drag_free_error = abs(parabola["gravity"] - GRAVITY) / GRAVITY * 100
+        print(f"  Same fit without drag {parabola['gravity']:.2f} m/s^2 "
+              f"({drag_free_error:.1f}% out) -- the bias drag introduces")
     if error >= 15:
         print()
         print("  Nothing tells this fit that gravity is 9.81; the number is")
@@ -373,9 +503,6 @@ def report(args) -> None:
     launch_height = args.launch_height
     if launch_height is None:
         launch_height = args.ball_mm / 2000.0  # ball centre sits one radius up
-
-    mass = args.ball_g if args.ball_g is not None else \
-        BALL_MASS_GRAMS.get(args.ball_size, 370.0)
 
     free = carry_drag_free(fit["speed"], fit["elevation"], launch_height)
     drag = carry_with_drag(fit["speed"], fit["elevation"], launch_height, mass,
@@ -467,6 +594,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--launch-height", type=float, default=None,
                         help="ball centre height at launch in metres "
                              "(default: one ball radius)")
+    parser.add_argument("--no-drag-fit", action="store_true",
+                        help="fit launch conditions with a drag-free parabola "
+                             "only; faster, and biased low by roughly 15%% on "
+                             "footage measured so far")
     parser.add_argument("--drag-coefficient", type=float, default=0.25,
                         help="drag coefficient (default 0.25)")
     parser.add_argument("--air-density", type=float, default=1.225,
