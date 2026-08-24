@@ -210,7 +210,7 @@ Each of these is verified on hardware, not merely written. Details are in the se
 | **Ball size capture** | A `BallSize` picker on the Record screen, written into every clip twice: as a filename token and as `mdta` metadata inside the movie. Both survive AirDrop, which a sidecar file would not. Builds and runs on device; **the metadata round-trip has not been confirmed from a real recording.** |
 | **Pinch to zoom in Review** | Up to 8×, with pan, double-tap to zoom to a tapped point, and a persistent badge that resets. Built on `UIScrollView`. Verified on device. |
 | **Telestration** | Yellow strokes over the video that hold position while the clip plays, with on/off and clear buttons. Strokes are stored normalised to the picture, so they track the video through zoom, pan and rotation. Verified on device. |
-| **First footage** | Ten clips, 2026-08-21. Five at 1080p/240, five at 4K/120. Documented under *Open Questions → How should a goal kick be filmed?* |
+| **First footage** | Ten clips, 2026-08-21. Five at 1080p/240, five at 4K/120. **The clips themselves no longer exist**; one track CSV survives in `tools/frames/archive-0821/`. Documented under *Open Questions → How should a goal kick be filmed?* |
 | **Step 3 — ball tracking** | Done, on the Mac. A stock `yolo11n` finds the ball across the flight with no training data. Acquisition takes the largest candidate rather than the most confident, gated on the distance the coach paced out, which is what stops it locking onto other people's footballs elsewhere on the pitch; `--max-gap` is 30 frames so the blur blackout off the boot does not end the track. Ten of eleven 2026-08-22 clips track correctly. |
 | **Step 4 — metrics** | Written, on the Mac. Produces speed, launch angle, carry and apex, with both flight models side by side, cuts the fit at the bounce automatically, and fits launch conditions against the drag ODE rather than a parabola. Nine of eleven clips produce sound numbers. |
 | **Ground truth** | Eleven kicks filmed 2026-08-22 with paced landing distances, camera at 10 yards, cones at a measured 5 yards. The first data in the project's history against which a computed carry can be checked at all. |
@@ -218,6 +218,27 @@ Each of these is verified on hardware, not merely written. Details are in the se
 | **Portability audited** | 2026-08-24. The maths ports to Accelerate with no OpenCV dependency. Recorded under *Porting risks*. |
 | **Core ML export** | `yolo11n.mlpackage` at the repo root, reproducing the PyTorch boxes to 0.00%. Built with a pinned Python 3.9 environment. **Never run on the Neural Engine**, which is the runtime that ships. |
 | **Crop architecture proven** | A 640 px crop at native resolution matches full-frame 3840 accuracy at 1/36th the compute. This resolves the largest porting risk and is what gets ported. |
+
+### What rests on evidence the repository no longer holds
+
+Audited 2026-08-24. These claims are believed true and were measured at the time, but **nothing committed can check them**, so they should be treated as testimony rather than data. Listed because a document claiming to be a source of truth should say which of its statements it cannot support.
+
+**The 2026-08-21 footage is gone.** Ten clips, deleted at some point before 2026-08-24; they are not on the Desktop and not anywhere else on the Mac. What survives is one track CSV in `tools/frames/archive-0821/`, which is enough to re-run the physics but not detection. Anything below measured on that footage cannot be re-derived.
+
+| Claim | Why it cannot be checked |
+|---|---|
+| The 70-format camera scan | Scan code not kept — see *Camera capability*, where this is flagged in place |
+| Photos retimed a 240 fps clip to 30 fps, stretching it 8× | Measured once during the capture spike; neither the clip nor the code survives. This is the entire basis for not using Photos as the store |
+| A 4K/120 clip survived a Photos round trip at 119.94 fps | Same — one observation, no artifact |
+| AirDrop routes video into Photos without asking | Behavioural observation on iOS; no artifact possible |
+| `HoughCircles` inflated diameter by ~45% | The refinement was removed and the code with it |
+| `--imgsz` 1280→1920 cut range scatter 200 mm → 118 mm | Measured on a 4K clip from the lost session. **Superseded** by the input-size table under *Analysis pipeline*, which was measured on surviving footage and says more |
+| Motion blur: panel detail legible on a ~70 px ball at 240 fps | From the lost footage |
+| Zoom, telestration, playback and iPad review "verified on device" | True when written; re-checkable only by running the app, not from the repo |
+
+**Two of these matter more than the rest.** The Photos retiming result is the sole justification for a storage decision the whole project is built on, and it rests on a single unrepeated observation. And the blur claim is what retires the largest technical risk on the books — at 13 m/s only, as the section itself says.
+
+Neither is worth re-testing now. Both are worth knowing are single points of evidence if either decision is ever revisited.
 
 ### Environment
 
@@ -308,7 +329,7 @@ No rule has been derived for this, deliberately: one clip is not enough to inven
 
 **`--contact-threshold` defaults to 0.3 of peak speed, not 0.15.** A ball resting on grass is not motionless in the image: handheld drift ran 250–390 px across the 2026-08-22 clips, and what registration leaves behind clears a 15% bar for three frames. Two clips fired contact while the ball still sat there and fitted 400–550 frames of a stationary ball. 0.3 and 0.5 select the same contact frame on both, so this is a plateau rather than a tuned value.
 
-**`--imgsz` defaults to the clip's own width**, so nothing is thrown away before the detector sees it. This is not a minor setting: the model resizes each frame before looking at it, and a downscale degrades the ball's apparent diameter, which is what every distance in the pipeline rests on. Measured on one 4K clip, going from 0.33× to 0.50× cut range scatter from 200 mm to 118 mm.
+**`--imgsz` defaults to the clip's own width**, so nothing is thrown away before the detector sees it. This is not a minor setting: the model resizes each frame before looking at it, and a downscale degrades the ball's apparent diameter, which is what every distance in the pipeline rests on. Measured on a 4K clip from the 2026-08-21 session, going from 0.33× to 0.50× cut range scatter from 200 mm to 118 mm — that footage no longer exists, so treat the figure as testimony; the table below says more and was measured on surviving clips.
 
 **The floor is measured**, on a 4K frame with the ball at a known 57.2 px:
 
@@ -710,7 +731,7 @@ Read that way the question largely dissolves, and the answer keeps the current a
 
 Still open as a protocol, but the first session is now on record. Camera distance, angle relative to the kick direction, and whether the operator pans or holds the phone fixed all change how hard tracking is and how accurate the result can be.
 
-**First footage, filmed 2026-08-21:** Size 4 ball, teal. Ten clips — five at 1080p/240, then five at 4K/120. Camera **side on and static** (handheld, no deliberate pan; the framing holds across a whole clip). Distance not measured. These clips predate the ball size selector, so they carry no size token and no metadata.
+**First footage, filmed 2026-08-21 — the clips are gone.** They are not on the Desktop and not elsewhere on the Mac; only `tools/frames/archive-0821/GoalKick-2026-08-21-080847-1080p240-track.csv` survives, which permits re-running the physics but not detection. Everything below is recorded from when the footage existed. Size 4 ball, teal. Ten clips — five at 1080p/240, then five at 4K/120. Camera **side on and static** (handheld, no deliberate pan; the framing holds across a whole clip). Distance not measured. These clips predate the ball size selector, so they carry no size token and no metadata.
 
 **What was filmed is not a goal kick.** The kicker strikes into a portable net. Measured from the first clip: the ball is **~4.2 m** from the camera, contact is at frame 545, free flight begins around 548 once the ball leaves the boot, and it reaches the net by ~589 — about **0.17 s** of flight. Speed is ~13 m/s at ~25°, against the ~30 m/s this document assumes elsewhere. The kick runs **11° off perpendicular, toward the camera**, right at the guardrail limit.
 
@@ -827,7 +848,11 @@ One caveat survives: that comparison ran on the Mac's CPU or GPU, not the Neural
 
 **That default is load-bearing and may not survive the move to the device.** See *Porting risks* under Tech Stack — native-resolution inference is the least device-friendly thing in the pipeline, and diameter precision is what every distance rests on.
 
-**The c1 anomaly is superseded and needs re-measuring.** It was recorded here that on c1 the ball appeared to accelerate upward across the tracked frames, which free flight forbids, with diameter bias against dark netting as the leading suspect. That clip is a kick into a net and its window very likely included the ball striking it — the same class of error as the bounce, at a different obstacle. Re-run it with the landing cut before treating it as a separate mystery.
+**The c1 anomaly is resolved.** It was recorded here that on c1 the ball appeared to accelerate upward across the tracked frames, which free flight forbids, with diameter bias against dark netting as the leading suspect. Re-run on 2026-08-24 through the current pipeline, c1 fits gravity at **10.90 m/s² — 11.1% out, and the tool's own verdict is "good"** — against the 3.49 recorded when the anomaly was written down. Speed 13.31 m/s at 28.3°, vertical residual 14.0 mm.
+
+Nothing was done to c1 specifically. The anomaly was an artifact of the pipeline that measured it — contact detection firing early and a drag-free fit — and it disappeared when those were fixed for other reasons. **No separate mystery remains.**
+
+Worth noting how that was possible: the 2026-08-21 footage no longer exists, but `tools/frames/archive-0821/*-track.csv` does, so the physics could be re-run without it. That is precisely the property the tracks were committed for.
 
 **The protocol lives in `shot-list.txt` at the repo root.** Plain text so it opens on a phone in a field. It covers where to stand, how far back, how to frame the ball, and what to shoot. It was followed on 2026-08-22 and revised afterwards from what that session taught. Three items in it carry the most weight:
 
