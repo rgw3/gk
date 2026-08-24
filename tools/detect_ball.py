@@ -246,11 +246,29 @@ class Track:
     size gate below then locked around that wrong ball, so the real one was
     rejected as the wrong size for the rest of the clip -- a track that
     looks immaculate and measures nothing.
+
+    Largest alone is not enough, which those same eleven clips also showed.
+    It fixed seven and broke two in the opposite direction, latching onto a
+    spare ball lying nearer the camera than the one being struck. Two more
+    still took a distant ball, because the kick had not entered frame yet
+    and there was nothing better on offer.
+
+    So acquisition can also be told the distance the coach paced out.
+    Expected diameter follows from it directly, fx * D / Z, and a candidate
+    more than a factor off that is a different ball whichever way it is
+    wrong. That gate applies *only* at acquisition: the ball recedes during
+    flight -- 9 m to 24 m on one measured kick -- so enforcing it throughout
+    would throw the flight away. Once locked, the continuity and size-ratio
+    checks below carry the track.
     """
 
-    def __init__(self, max_jump: float, diameter_tolerance: float):
+    def __init__(self, max_jump: float, diameter_tolerance: float,
+                 acquire_diameter: float | None = None,
+                 acquire_tolerance: float = 1.5):
         self.max_jump = max_jump
         self.diameter_tolerance = diameter_tolerance
+        self.acquire_diameter = acquire_diameter
+        self.acquire_tolerance = acquire_tolerance
         self.accepted: list[dict] = []
 
     @property
@@ -283,10 +301,22 @@ class Track:
             return None, "no-detection"
 
         if not self.accepted:
-            # Largest, not first. See the class docstring -- the detector's
-            # ranking is by confidence, and confidence favours the distant
-            # stationary ball over the near one we actually came to measure.
-            chosen = max(candidates, key=lambda c: c["diameter"])
+            usable = candidates
+            if self.acquire_diameter is not None:
+                # The coach paced the distance out, so we know how big the
+                # ball should look. Anything wildly off that is a different
+                # ball, whichever direction it is wrong in.
+                low = self.acquire_diameter / self.acquire_tolerance
+                high = self.acquire_diameter * self.acquire_tolerance
+                usable = [c for c in candidates
+                          if low <= c["diameter"] <= high]
+                if not usable:
+                    return None, "rejected-distance"
+
+            # Largest of what survives. See the class docstring -- the
+            # detector's ranking is by confidence, and confidence favours the
+            # distant stationary ball over the near one we came to measure.
+            chosen = max(usable, key=lambda c: c["diameter"])
             chosen["frame"] = frame
             self.accepted.append(chosen)
             return chosen, "ok"
@@ -347,8 +377,20 @@ def run(args) -> None:
         )
         print()
 
+    acquire_diameter = None
+    if args.camera_distance is not None:
+        # fx is nominal, from the format's field of view; see project_notes.
+        fx = 1260.0 if info["width"] <= 1920 else 2520.0
+        acquire_diameter = fx * (args.ball_mm / 1000.0) / args.camera_distance
+        print(f"Camera at {args.camera_distance:.1f} m, so the ball should "
+              f"be about {acquire_diameter:.0f} px across at acquisition "
+              f"({acquire_diameter / args.distance_tolerance:.0f} to "
+              f"{acquire_diameter * args.distance_tolerance:.0f} px allowed).")
+        print()
+
     model, device = load_model(args.model, args.device)
-    track = Track(args.max_jump, args.diameter_tolerance)
+    track = Track(args.max_jump, args.diameter_tolerance,
+                  acquire_diameter, args.distance_tolerance)
     stabiliser = Stabiliser(args.stabilise)
     if args.stabilise:
         print("Stabilising against the background "
@@ -468,8 +510,11 @@ def summarise(rows, examined, destination, info, args,
     if rejected:
         jumps = sum(1 for r in rejected if r["status"] == "rejected-jump")
         sizes = sum(1 for r in rejected if r["status"] == "rejected-size")
-        print(f"Rejected          {len(rejected)}  "
-              f"({jumps} implausible move, {sizes} wrong size)")
+        far = sum(1 for r in rejected if r["status"] == "rejected-distance")
+        parts = f"{jumps} implausible move, {sizes} wrong size"
+        if far:
+            parts += f", {far} wrong distance before acquiring"
+        print(f"Rejected          {len(rejected)}  ({parts})")
 
     if not hits:
         print()
@@ -579,6 +624,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--ball-mm", type=float, default=206.1,
                         help="ball diameter in mm (default 206.1, a Size 4)")
+
+    # The distance the coach paced out, which is the one thing about the
+    # scene the software cannot work out for itself and the coach already
+    # knows. It settles which football is the subject when several are in
+    # shot. 10 yards is 9.14 m.
+    parser.add_argument("--camera-distance", type=float, default=None,
+                        help="distance from camera to ball in METRES; used "
+                             "only to pick the right ball at acquisition")
+    # 1.3, not 1.5. At 1.5 a spare ball sitting 6.8 m away measured 76.8 px
+    # against an expected 56.8, which is inside a 38-85 px window -- the gate
+    # looked at it and approved it. 1.3 gives 43.7-73.8 px at 4K, which
+    # excludes it while every correctly acquired clip in the 2026-08-22 set
+    # sits between 55.7 and 57.9. It still tolerates ~30% error in pacing,
+    # which is more than a coach counting strides will be out by.
+    parser.add_argument("--distance-tolerance", type=float, default=1.3,
+                        help="factor the ball's apparent size may differ "
+                             "from what --camera-distance predicts, at "
+                             "acquisition only (default 1.3)")
 
     parser.add_argument("--annotate", action="store_true",
                         help="write frames with the detected ball drawn on")

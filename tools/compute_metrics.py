@@ -428,9 +428,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--contact-index", type=int, default=None,
                         help="override automatic contact detection")
-    parser.add_argument("--contact-threshold", type=float, default=0.15,
+    # 0.3, not 0.15. A ball resting on grass is not motionless in the image:
+    # handheld camera drift ran 250-390 px across the 2026-08-22 clips, and
+    # what registration leaves behind is enough jitter to clear a 15% bar for
+    # three frames. Two clips fired contact while the ball was still sitting
+    # there, fitted 400-550 frames of a stationary ball, and reported speeds
+    # under 1.2 m/s with 200 mm residuals.
+    #
+    # 0.3 and 0.5 pick the same contact frame on both -- a plateau, not a
+    # tuned value -- and the seven clips that were already correct barely
+    # move. If a kick is ever missed because of this, the symptom is a
+    # contact frame late in the flight; lower it for that clip.
+    parser.add_argument("--contact-threshold", type=float, default=0.3,
                         help="fraction of peak speed that counts as moving "
-                             "(default 0.15)")
+                             "(default 0.3)")
     parser.add_argument("--contact-sustain", type=int, default=3,
                         help="frames the ball must keep moving before contact "
                              "is believed (default 3)")
