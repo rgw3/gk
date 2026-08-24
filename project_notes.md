@@ -151,7 +151,9 @@ What was actually at risk — that a different runtime would move the box coordi
 
 **Coaches cannot pass flags.** Defaults carried 9 of 11 clips on the 2026-08-22 set, which is respectable, but two failed and the app has no way to say so intelligibly. Whatever ships must either work on defaults or explain itself.
 
-**Known technical risk, partially measured:** motion blur on a fast-moving ball may defeat Vision's built-in tracker and force a trained Core ML detector. First footage (2026-08-21, bright sun, ball at ~13 m/s) shows **no meaningful blur** — panel detail is legible on a ball ~70 px across at 240 fps. This retires the risk at that speed and in that light only. A real goal kick at ~30 m/s smears roughly 2.3× further per exposure, and overcast light lengthens exposure further, so the risk stands for the footage that actually matters.
+**Motion blur: no longer a partially-measured risk. Measured 2026-08-24, and it is a hard operating limit.** This entry previously said blur "may defeat" the tracker, and cited the first footage — bright sun, ~13 m/s, panel detail legible on a ~70 px ball — as retiring the risk at that speed and in that light only. That caution was right and the risk is now quantified: **the detector stops finding the ball entirely at about 29% of its width in smear**, and is already down to confidence 0.73 at 20.6%. See *The detector's blur response*.
+
+Relative blur is `v · exposure / D` and does not depend on the format. At 30 m/s it needs an exposure of about **1/728 s** to stay under 20%. If exposure runs to the frame interval, as it does in falling light, relative blur is 61% at 240 fps and 121% at 120 fps — both far past failure. **In poor light this pipeline does not degrade gracefully; it stops working, and a higher frame rate does not rescue it.** Nothing in the app checks exposure or warns the coach.
 
 **On Swift 6:** the decision to stay in Swift 5 mode stands, and was reconsidered deliberately after capture was working rather than allowed to lapse. Strict concurrency turns data-race issues into hard compile errors, and the next phase — passing `CMSampleBuffer` and `CVPixelBuffer` to Vision — is the worst area for that friction, since neither type is `Sendable` and the annotations are Apple's to fix, not ours. `SWIFT_VERSION` is a single build setting, so migrating later costs the same work on a more settled design. Revisit once tracking works.
 
@@ -186,6 +188,13 @@ Three consequences, all binding:
 | Within ±15° of perpendicular to the kick | Off-axis foreshortening under-reads velocity by roughly `cos φ` — 3.4% at 15°, 13% at 30°. |
 | Ball stationary and in frame before the kick | The most accurate diameter measurement available is the ball at rest: sharp, unblurred, measurable over many frames. Scale is fixed there, once, rather than fought for mid-flight. It also makes contact detectable automatically — contact is the first frame the ball moves. |
 | No other footballs in shot, or none nearer than the one being kicked | Learned on 2026-08-22, where a bag of spares on the touchline and a game on the next pitch cost nine clips out of eleven. The detector cannot know which football matters; the *nearest* one is the measurement ball, and the acquisition rule depends on that staying true. A spare ball rolled closer to the camera than the one being struck would break it. |
+
+⚠️ **Two of the rationales in that table have been superseded by measurement and are not yet rewritten.** The guardrails themselves may well be right; what is wrong is *why* they are said to be right, and a reader taking the reasons at face value would draw false conclusions about where accuracy comes from. Measured 2026-08-24 with the synthetic harness — see punch list item 2.1:
+
+- **"±15° of perpendicular … foreshortening under-reads velocity by roughly `cos φ`."** With exact diameters, off-square filming costs **nothing at all out to 45°**. That reasoning describes a 2D image-plane measurement; this pipeline reconstructs depth per frame and recovers the out-of-plane component. What off-square really does is **amplify diameter error** — at a 6% bias, 15° turns a 0% gravity error into 3.9% — so the guardrail earns its place, by a different mechanism, and would become irrelevant if 3.1 were fixed.
+- **"5–12 m … accuracy becomes a known quantity rather than a lottery."** Random error does not behave like a lottery at any distance in that range: speed scatter is 0.03% at 5 m and 0.18% at 27 m, because the range smoothing suppresses random diameter noise by √N. The real risks of standing back are **detection failure** and **systematic bias as the box shrinks**, neither of which has been measured.
+
+**Both are left as they stand deliberately.** Replacing a guardrail's justification needs the measurement that would replace it, and in each case that measurement has not been taken.
 
 **Whether the landing must be in frame depends on what the clip is for, and the two answers conflict.** This is worth stating plainly because `shot-list.txt` and this table appear to disagree, and neither is wrong.
 
@@ -222,7 +231,9 @@ None of the filming guardrails is built. The app offers no framing guidance and 
 
 **The test targets remain empty.** No test has been written for either the Swift app or the Python tools.
 
-**No synthetic validation exists.** The pipeline has now been checked against *real* data with a known answer — the eleven paced landings of 2026-08-22 — but never against a generated trajectory whose launch conditions are known exactly. Real footage confirms the answer without isolating which stage is wrong when it is not; synthetic data would. See *Next Steps → Step 5*.
+**Synthetic validation now exists** — `tools/synth_track.py`, built 2026-08-24, punch list item 2.1. This paragraph previously said it did not, and argued that real footage confirms an answer without isolating which stage is wrong when it does not. That argument was right and the harness has since paid for itself several times over: it proved the geometry, projection, depth reconstruction and gravity fit exact; found the launch-time origin defect that the gravity self-check is structurally blind to; showed the sign of a bias-induced gravity error flips with window length; and established that random diameter error is averaged away while systematic error is not.
+
+**What is still missing is validation of the *detector*.** Everything above tests the physics on synthetic detections. Nothing tests whether the detector's boxes are right on real pixels, which is where the outstanding defect of 3.1 lives.
 
 ### What is done
 
@@ -332,6 +343,7 @@ Measurement is being developed in Python on the Mac before anything is ported to
 | `tools/detect_ball.py` | YOLO detection, background registration, continuity gating; writes the per-frame CSV |
 | `tools/compute_metrics.py` | Reads that CSV; 3D reconstruction, trajectory fit, landing detection, both flight models |
 | `tools/validate.py` | Checks the pipeline against ground truth: `carry` (observed displacement vs paced landing), `height` (camera height, independent of `fx`), `tilt` (principal-point sweep, kept as a negative result) |
+| `tools/synth_track.py` | Trajectories with a **known** answer. `generate` writes a synthetic track CSV that `compute_metrics.py` reads unmodified; `check` also runs the real physics over it and prints truth against recovered; `sweep` re-fits one track at a series of window lengths; `study noise\|geometry\|format\|distance` runs repeated seeded trials across a swept parameter and reports mean and spread. Injects off-square geometry, drag, centroid noise, diameter noise as a fraction **or in pixels**, and two diameter-bias models — recession-driven and blur-driven. **Use `--diameter-noise-px`, not `--diameter-noise`, for anything comparing formats or distances:** a fraction holds relative error constant by construction and measures nothing, which invalidated the first format study and a first attempt at the distance curve. Built 2026-08-24; see punch list item 2.1 for what it has found |
 | `tools/export_coreml.py` | Converts the detector to Core ML, checks the export against the weights, reproduces the crop-vs-full-frame measurement, and — `dump`, added 2026-08-24 — freezes the 640 crops to PNG as the fixed input for the on-device comparison in punch list item 1.1. **Runs under `.venv-export`, not `.venv`** |
 | `tools/sessions/*.csv` | Ground truth per filming session: which file is which kick, the paced landing, the paced camera distance, and whether the track reaches the ground |
 | `tools/requirements.txt` | `opencv-python`, `numpy`, `ultralytics` — the analysis environment |
@@ -339,7 +351,7 @@ Measurement is being developed in Python on the Mac before anything is ported to
 
 **The kick-to-file mapping lives in `tools/sessions/2026-08-22.csv`, not in this document.** Landing distances quoted here by kick number are meaningless without it, and prose is the wrong place for a lookup table that code also has to read. `validate.py` reads it directly, so the numbers in this file and the numbers the tools produce cannot drift apart.
 
-> ⚠️ **The clips are not in this repository.** Eleven files, about 1.3 GB, at `~/Desktop/clips/`. Nothing under `tools/` can be reproduced without them — every command in *Next Steps → Step 5* will fail with no useful explanation if they are missing or moved.
+> ⚠️ **The clips are not in this repository.** Eleven files, about 1.3 GB, at `~/Desktop/clips/`. Nothing under `tools/` that reads footage can be reproduced without them — every command under *Next Steps → Before starting anything* will fail with no useful explanation if they are missing or moved. **`synth_track.py` is the exception**: it generates its own data and needs no footage at all, which is part of why it is useful.
 
 **They are deliberately not backed up, and that is a decision rather than an oversight.** Raised on 2026-08-24 and accepted: the footage is a single copy on the Mac's Desktop, and the project carries the risk of losing it. Do not propose committing them to git, adding LFS, or building a sync — the question has been asked and answered.
 
@@ -372,6 +384,8 @@ The gate applies **only at acquisition**. The ball recedes from 9 m to 24 m duri
 **`--skip-frames` defaults to 3 and that is sometimes not enough.** It drops samples after contact while the ball is still deforming against the boot. On kick 11 the detector lost the ball entirely for twelve frames coming off the boot, and the default started the fit inside that blur, where the box is unreliable and therefore so is diameter and therefore so is range. Starting at the first frame with a real lock — `--skip-frames 11` on that clip — was what produced the first passing gravity check.
 
 No rule has been derived for this, deliberately: one clip is not enough to invent a heuristic from, and inventing one would fit this pitch rather than the problem. If it recurs across a second session, the rule should be to start at the first sample after the largest detection gap in the first fifth of a second. **Until then, if a clip's gravity looks poor, check what frame the fit starts on before assuming the physics is wrong.**
+
+⚠️ **Raising `--skip-frames` also costs launch speed, because the fit reports velocity at the window start.** At 120 fps a skip of 11 under-reports vertical velocity by 0.9 m/s. See *The launch-time origin defect* — the flag is not free, and the gravity self-check cannot detect what it costs.
 
 **`--contact-threshold` defaults to 0.3 of peak speed, not 0.15.** A ball resting on grass is not motionless in the image: handheld drift ran 250–390 px across the 2026-08-22 clips, and what registration leaves behind clears a 15% bar for three frames. Two clips fired contact while the ball still sat there and fitted 400–550 frames of a stationary ball. 0.3 and 0.5 select the same contact frame on both, so this is a plateau rather than a tuned value.
 
@@ -674,7 +688,266 @@ The 1.7 s first prediction is one-time warm-up and must not be mistaken for thro
 
 ### 2 — Get a known answer to debug against
 
-**2.1 Build the synthetic validation harness.** *(was Step 5)* Generate a ballistic trajectory with chosen parameters, project it through the pinhole model, and feed it to `compute_metrics.py`, so the maths can be checked independently of any footage. Every debugging session so far has lacked a known answer; this would have caught the landing-window bug in an afternoon. It also turns the noise tolerance and the ±15° guardrail from arguments into measured curves, and compares 1080p against 4K on the *same* kick, which no single-phone filming session can do.
+**2.1 Build the synthetic validation harness.** *(was Step 5)* **Built 2026-08-24 as `tools/synth_track.py`.** It generates a ballistic trajectory with chosen parameters, projects it through the pinhole model — the exact inverse of `reconstruct()` — and writes a CSV in `detect_ball.py`'s format, which `compute_metrics.py` then reads **completely unmodified**. Nothing is imported into the tool under test and the tool under test knows nothing about the harness, so this exercises the shipping code path rather than a private copy of the physics. `generate` writes the CSV; `check` also drives `find_contact`, `find_landing`, `reconstruct` and `fit_launch` over it and prints truth against recovered.
+
+**First run, the idealised case — no noise, no drag, square on, exact diameters:**
+
+| quantity | truth | recovered | error |
+|---|---|---|---|
+| gravity | 9.8100 | 9.8102 | **+0.00%** |
+| vx | 20.4788 | 20.4803 | +0.01% |
+| vz | 0 | 0 | exact |
+| **vy** | 14.3394 | **14.0129** | **−2.28%** |
+| speed | 25.0000 | 24.8154 | −0.74% |
+| elevation | 35.0000 | 34.3805 | −1.77% |
+
+Vertical residual 1.19 mm. **The geometry, the projection, the depth reconstruction and the gravity fit are exact.** That is worth stating plainly, because it removes four candidate explanations from the 3.1 investigation in one run.
+
+**But it found a defect, and it is not a rounding error.** See *The launch-time origin defect* below.
+
+**The ladder, rungs 2 and 3, run 2026-08-24.** Same idealised conditions, varying only geometry and how the clip ends:
+
+| run | gravity | vx | vz | vy | speed | elevation |
+|---|---|---|---|---|---|---|
+| square on | +0.00% | +0.01% | exact | −2.28% | −0.74% | −1.77% |
+| 15° off-square | −0.01% | −0.00% | −0.00% | −2.29% | −0.75% | −1.77% |
+| 30° off-square | −0.00% | +0.00% | +0.01% | −2.28% | −0.74% | −1.77% |
+| truncated mid-flight (`--after net`) | +0.01% | +0.01% | exact | −2.27% | −0.74% | −1.77% |
+
+**Three findings, and the second is the substantial one.**
+
+**The `vy` error is constant at −2.28% across every geometry.** It does not vary with off-square angle, with flight length, or with whether a landing exists. That is the signature of a single defect independent of geometry, and it confirms the time-origin diagnosis rather than merely being consistent with it.
+
+**Off-square filming costs nothing when depth is accurate.** At 30° off the perpendicular, with `vz` at 10.24 m/s, gravity is recovered to −0.00% and `vz` itself to +0.01%. This is the direct confirmation of something the file previously observed but could not explain — that the 56.5° control kick of 2026-08-22 fitted gravity to within 1.5% despite being nearly four times the guardrail. The mechanism is now clear: the pipeline performs a full 3D reconstruction with per-frame depth, so it recovers the out-of-plane component properly instead of losing it to foreshortening. **The cross-term `2·u̇·Ż/fx` is not a geometric penalty — it is an amplifier of depth error, and with exact diameters there is no error for it to amplify.**
+
+⚠️ **This puts the stated rationale for the ±15° guardrail in question, though not the guardrail itself.** *Measurement Approach* justifies it as "off-axis foreshortening under-reads velocity by roughly `cos φ` — 3.4% at 15°, 13% at 30%." Measured here, speed is recovered to −0.74% at **every** angle, the same as square on. That justification describes a 2D image-plane measurement, which is not what this pipeline does. The guardrail may still be right for other reasons — an off-square ball recedes faster, so it loses pixels sooner and its diameters degrade, and it is diameter error that the cross-term then amplifies — but those are different mechanisms with different magnitudes, and they have not been measured. **Not yet corrected in the guardrail table, because what should replace it is not yet known.**
+
+**Truncated flight recovers everything.** The `--after net` run has no landing to find, ends 40 frames into the flight, and returns the same numbers as the full-flight runs — with a *lower* residual, 0.01 mm against 1.19 mm. This is the empirical confirmation of *Measurement Approach*'s central claim: only launch conditions are needed, so footage that ends early is not degraded footage.
+
+**The residual floor is 1.19 mm and it is an artifact of the CSV, not of the physics.** Diameter is written to two decimals, matching `detect_ball.py`; at 56.8 px that quantisation is 8.8 × 10⁻⁵ relative, which propagates to about 0.9 mm at a 10 m apex. It is far below anything that matters, but it is the harness's precision floor and should not be mistaken for a defect on long flights. Short windows sit at 0.01 mm because the ball has barely climbed.
+
+**Rung 4, the diameter bias — run 2026-08-24, and it produced the most consequential result so far.**
+
+⚠️ **First, a limitation of the harness, found by running it.** `--diameter-bias` is keyed to recession, `Z − camera_distance`. A perfectly square kick has `vz = 0` and therefore never recedes, so **the bias is silently not applied at all** and `--diameter-bias 0.06 --off-square 0` returns exactly the unbiased numbers. That run tested nothing. The real defect has two drivers — the ball receding and motion blur — and only the first is modelled. **Square-on cases cannot currently be tested for diameter bias.**
+
+At 30° off-square, where the ball does recede, a 6% progressive under-read does substantial damage:
+
+| quantity | error with 6% bias at 30° |
+|---|---|
+| gravity | **+5.60%** (10.36 m/s²) |
+| speed | +6.20% |
+| vx | +6.88% |
+| vy | +3.59% |
+| vz | +9.19% |
+| residual | **40.60 mm**, against 1.19 mm unbiased |
+
+**The direction looked wrong, and chasing it produced the finding.** Real footage reads gravity *low*, 7.7–8.3 against 9.81; this reads *high*. The resolution is that **a progressive depth inflation flips the sign of the gravity error depending on the length of the fit window.** Under-reading diameter inflates depth progressively, which multiplies the parabola by a growing factor and injects a cubic term. Over a short window the linear part dominates and drags gravity down; over a long window the cubic projects onto the quadratic and pushes it up.
+
+Computed directly, for a 2% per second depth inflation:
+
+| fit window | implied gravity | error |
+|---|---|---|
+| 0.10 s | 9.266 | −5.5% |
+| 0.25 s | 9.310 | −5.1% |
+| 0.50 s | 9.384 | −4.3% |
+| 1.00 s | 9.531 | −2.8% |
+| 1.50 s | 9.678 | −1.3% |
+| 2.00 s | 9.825 | +0.2% |
+| 2.90 s | 10.090 | +2.9% |
+
+**The crossover is near two seconds.** The synthetic kick fits 2.9 s and therefore reads high; kick 11's free flight was 104 frames at 120 fps — **0.87 s** — which sits firmly in the negative region. So the two results agree rather than conflicting, and the 3.1 hypothesis is strengthened rather than undermined.
+
+**Three consequences worth carrying into 3.1.**
+
+- **The sign of the gravity error is not diagnostic on its own.** Both signs come from the same defect, and which one appears depends on window length. Comparing fitted gravity across clips of different flight durations is comparing points on this curve, not comparing severities.
+- **The residual is the better detector.** 40.60 mm against 1.19 mm is a factor of 34, and unlike gravity it does not change sign. A quadratic fit cannot describe a cubic, and the residual is the fit saying so. Nothing currently reads it as a bias indicator.
+- **This table was computed analytically. It has since been reproduced through the pipeline** — see the sweep results below, which put the crossover near 1.5 s rather than 2 s and match kick 11's real residual and gravity error at its actual window length.
+
+**The harness gained two things on 2026-08-24 in response to the above.** `--blur-bias` under-reads diameter in proportion to **image-plane speed** rather than recession, which is the only bias term that acts on a square-on kick — recession is zero there, while image speed is at its highest. And a `sweep` subcommand re-fits one generated track at a series of window lengths, changing only where the window ends, so the sign-flip argument could be tested through `reconstruct()` and `fit_launch()` instead of analytically.
+
+**Rung 5 — the window sweep, run 2026-08-24. Three results, and the third was not the one being looked for.**
+
+**Control, no bias.** Gravity 9.811 at every window length from 0.10 s to 2.90 s, residual 0.01 mm throughout. The sweep introduces no artifact of its own, which is what makes the rest of it readable.
+
+**Progressive recession bias, 6% at 30° off-square — the sign flip is real and reproduces through the shipping code path:**
+
+| window | gravity | error | residual | speed error |
+|---|---|---|---|---|
+| 0.10 s | 8.738 | **−10.9%** | 0.02 mm | −0.18% |
+| 0.25 s | 8.861 | −9.7% | 0.20 mm | +0.27% |
+| 0.50 s | 9.084 | −7.4% | 1.35 mm | +1.07% |
+| 0.75 s | 9.282 | −5.4% | 3.92 mm | +1.92% |
+| 1.00 s | 9.463 | −3.5% | 8.13 mm | +2.83% |
+| 1.50 s | 9.794 | −0.2% | 21.94 mm | +4.77% |
+| 2.00 s | 10.103 | +3.0% | 33.02 mm | +5.78% |
+| 2.90 s | 10.360 | **+5.6%** | 40.60 mm | +6.20% |
+
+**The crossover is near 1.5 s** — the analytic estimate said 2 s, close enough given a different bias profile. The residual rises monotonically from 0.02 mm to 40.60 mm and never changes sign.
+
+**A cross-check against real footage that works.** Kick 11's free flight is 104 frames at 120 fps, **0.87 s**, and reported a **3.2 mm** residual with fitted gravity **9.23** — that is −5.9%. The table above at 0.75 s gives 3.92 mm and −5.4%. **A 6% progressive recession bias over kick 11's actual window reproduces both its residual and its gravity error**, which is the closest thing to confirmation the 3.1 hypothesis has had.
+
+**Uniform bias behaves completely differently, and finding that out was an accident.** The blur run saturated: a square-on ball crosses the frame at 47 px per frame against a 30 px reference, so `min(1, step/reference)` pinned at 1 and the bias was **uniform rather than progressive** for the whole flight. What it produced:
+
+| window | gravity | error | residual |
+|---|---|---|---|
+| every length, 0.10–2.90 s | 10.437 | **+6.4%** | **0.01 mm** |
+
+A uniform 6% under-read inflates every distance by 6.38%, and the numbers match that to two decimals — gravity +6.39%, `vx` +6.39%, and `vy` +3.96% which is the same 6.38% scale less the 2.28% time-origin defect. **The shape is still a perfect parabola, only scaled, so the residual sees nothing at all.**
+
+⚠️ **This gives two distinguishable signatures, and they call for different fixes:**
+
+| symptom | cause | fix |
+|---|---|---|
+| gravity wrong, **residual near zero**, error identical at every window length | **uniform** scale error — `fx`, ball size, or a constant box bias | recalibrate; nothing about the flight is wrong |
+| gravity wrong, **residual large**, error varying with window length and changing sign | **progressive** bias — the box degrading through the flight | correct the diameter trend |
+
+**A uniform scale error cannot be what ails the real clips**, and the reason is already recorded: it would scale carry and gravity by the same factor, but observed displacement matches the paced landings to 3–10% while gravity is far worse. The defect is progressive, which is what 3.1 already believed and can now demonstrate.
+
+**Rung 6 — blur bias below saturation, and it identifies which mechanism the real defect is.** Re-run with `--blur-reference 200` so the term varies instead of pinning, the bias profile is **U-shaped**: 1.72% at launch, 1.41% at the apex, 1.72% at landing, because image speed is highest when vertical motion is fastest. Mean about 1.5%.
+
+| window | gravity | error | residual |
+|---|---|---|---|
+| 0.10 s | 10.075 | **+2.7%** | 0.01 mm |
+| 0.50 s | 10.051 | +2.5% | 0.04 mm |
+| 1.00 s | 10.016 | +2.1% | 0.26 mm |
+| 2.00 s | 9.970 | +1.6% | 0.99 mm |
+| 2.90 s | 9.961 | **+1.5%** | 1.21 mm |
+
+At the long window it converges on +1.5%, which is the mean bias acting as a uniform scale. At short windows it reads **higher**, +2.7% — and that is the finding.
+
+⚠️ **The direction of the window dependence encodes the direction of the bias trend, and it points at recession.**
+
+| bias trend over the window | gravity at short windows |
+|---|---|
+| **increasing** — recession, the ball receding and shrinking | reads **low** |
+| **decreasing** — blur, worst off the boot and easing toward the apex | reads **high** |
+
+A window starting just after contact sees blur *decreasing* and recession *increasing*, so the two mechanisms push fitted gravity in opposite directions. **The real clips read low** — kick 11 at −5.9% over 0.87 s, and the set averaging 7.7–8.3. So the dominant defect is **recession-driven, not blur-driven**, which means the correction in 3.1 should be a function of range rather than of image speed. That is a materially different fix, and nothing before this could have distinguished them.
+
+**One qualification.** The residual stays under 1.21 mm throughout this run even while gravity is 1.5–2.7% out. **The residual only detects strongly progressive bias**; a mild trend behaves almost like a uniform scale error and hides from it. So the residual is the honest indicator when it is large, but a small residual does not clear a clip.
+
+**Two output bugs in the harness were exposed by these runs and fixed:** the generator summary line printed `diameter bias 0` while a blur bias was active, and the "this is the idealised case" footer printed even when blur bias was set. Both would have made a biased run look clean in its own header.
+
+**Rung 7 — the noise study, 50 seeded trials per point.** Centroid noise and diameter noise swept together, on a 4K/120 kick at 9.14 m.
+
+| centroid px | diameter frac | speed err mean ± sd | gravity err mean ± sd | residual |
+|---|---|---|---|---|
+| 0.00 | 0.000 | −0.74 ± 0.00 | +0.00 ± 0.00 | 1.2 mm |
+| 0.00 | 0.050 | −0.54 ± 0.34 | +0.26 ± 0.28 | 4.8 mm |
+| 0.50 | 0.000 | −0.74 ± 0.00 | +0.00 ± 0.00 | 2.2 mm |
+| 0.50 | 0.020 | −0.67 ± 0.18 | +0.06 ± 0.12 | 3.2 mm |
+| 2.00 | 0.000 | −0.74 ± 0.00 | +0.00 ± 0.01 | 7.3 mm |
+| 2.00 | 0.050 | −0.41 ± 0.46 | +0.30 ± 0.31 | 9.6 mm |
+
+**Centroid noise is almost harmless to the metrics.** Two pixels of centre wobble — four times what any real detector shows — moves speed, angle and gravity by essentially nothing. The fit uses every sample, and centroid error is zero-mean in a way that averages out.
+
+**Diameter noise is the whole story**, which is the quantitative confirmation of something this file has asserted from the beginning: relative range error tracks relative diameter error one for one, and every distance rests on it.
+
+⚠️ **Symmetric diameter noise produces an asymmetric range error, and therefore a bias, not just scatter.** Range is `fx·D/d`, so it is *inversely* proportional to diameter, and by Jensen's inequality the mean of `1/d` exceeds `1/mean(d)`. Computed directly, 5% diameter noise inflates mean range by **+0.254%**, and the study shows speed moving from −0.74% to −0.41% across exactly that range. **Noisy diameters do not merely blur the answer — they systematically inflate every distance**, and no amount of averaging removes it because it is a property of the transformation rather than of the sample.
+
+⚠️ **The residual responds to noise as well as to bias**, rising from 1.2 mm to 7.3 mm on centroid noise alone while every metric stayed correct. So it is not a clean bias detector: **a large residual means "something is wrong", not "the diameters are biased"**. Item 6.1 should not present it to a coach as though it were specific.
+
+**Rung 8 — the geometry study. The ±15° guardrail earns its place, but not for the reason recorded.** Mean gravity error, off-square angle against recession bias:
+
+| off-square | bias 0 | bias 0.02 | bias 0.06 | bias 0.10 |
+|---|---|---|---|---|
+| 0° | +0.00% | +0.00% | +0.00% | +0.00% |
+| 5° | −0.01% | +0.39% | +1.18% | +1.99% |
+| 15° | −0.01% | +1.26% | +3.91% | +6.73% |
+| 30° | −0.00% | +1.79% | +5.60% | +9.73% |
+| 45° | −0.00% | +1.91% | +5.98% | +10.41% |
+
+**The `bias 0` column is flat to 45°.** With exact diameters, off-square filming costs nothing at all — not 3.4% at 15°, not 13% at 30°. The `cos φ` foreshortening argument in *Measurement Approach* describes a 2D image-plane measurement and does not apply to a pipeline that reconstructs depth per frame.
+
+**But every other column fans out sharply, and that is the real cost.** Off-square filming is an *amplifier of diameter error*, exactly as the cross-term `2·u̇·Ż/fx` predicts. At a realistic 6% bias, going from square to 15° turns a 0% error into **3.91%**, and 30° into 5.60%. The effect saturates by about 30–45°, so beyond that further misalignment adds little.
+
+**This gives a basis for choosing the threshold that the project has never had.** At 6% bias, 5° off costs 1.18% while 15° costs 3.91% — so the guardrail is worth roughly a factor of three, and tightening it further has real value. Note also that **the two defects multiply**: fixing the diameter bias in 3.1 collapses the whole table to the first column, which is a second reason to treat 3.1 as the priority.
+
+⚠️ **Sign caution.** These are full-flight windows, past the 1.5 s crossover, so the errors read positive. Real short windows put the same errors negative. Read the magnitudes, not the signs.
+
+**Rung 9 — the format study, and it is INVALID AS RUN.** Recorded because the flaw is instructive, not because the numbers are usable.
+
+| format | ball at rest | speed err ± sd | gravity err ± sd | residual |
+|---|---|---|---|---|
+| 1080p/240 | 28.4 px | −0.33 ± 0.12 | +0.04 ± 0.09 | 4.1 mm |
+| 4K/120 | 56.8 px | −0.67 ± 0.18 | +0.06 ± 0.12 | 3.2 mm |
+
+**The flaw: diameter noise was specified as a fraction, so both formats received the same *relative* error** — which silently deletes the entire advantage 4K has. A detector's diameter error is roughly a fixed number of *pixels*, and at 0.5 px that is **1.76% on a 28.4 px ball against 0.88% on a 56.8 px one**, a factor of two. The study as run therefore asked "given equal relative noise, which format wins?", and answered "1080p/240, by having twice the samples to average" — which is true and is not the question.
+
+**One thing in it is real and worth keeping.** The speed error differs between the formats, −0.33% against −0.67%, and that is the launch-time origin defect of 3.5 behaving exactly as predicted: `--skip-frames 3` is 12.5 ms at 240 fps but 25 ms at 120 fps, so the defect is **half as large at 240 fps**. An independent confirmation of 3.5 from a study that was not looking for it.
+
+**Fixed, and re-run with diameter noise expressed in pixels.** `--diameter-noise-px` was added for this, and the format study now uses it.
+
+| format | ball at rest | relative noise | speed err ± sd | gravity err ± sd | residual |
+|---|---|---|---|---|---|
+| 1080p/240 | 28.4 px | 1.76% | −0.34 ± **0.10** | +0.03 ± **0.08** | 4.0 mm |
+| 4K/120 | 56.8 px | 0.88% | −0.72 ± **0.08** | +0.01 ± **0.05** | 2.4 mm |
+
+**4K/120 is the more precise configuration**, on a like-for-like kick with a like-for-like detector: gravity scatter 0.05 against 0.08, speed scatter 0.08 against 0.10, residual 2.4 mm against 4.0 mm. Twice the pixels across the ball beats twice the temporal samples. Notably the win is **less than the 2:1 the pixel counts suggest** — 1080p/240 recovers much of it by having twice as many samples to average — but it is a win, and it is consistent across all three columns.
+
+⚠️ **This does not yet settle the open question, because motion blur is not modelled per format.** *Which capture configuration gives better metric accuracy* lists 1080p/240's advantage as a shorter exposure and therefore less blur, and that is real: exposure is at most 4.2 ms at 240 fps against 8.3 ms at 120 fps, and image speed in pixels is halved again at 1080p because `fx` is halved. So blur in pixels is roughly **four times lower** at 1080p/240, or about **twice** lower relative to the ball's own size. **That is the same factor of two, pointing the other way**, and the two effects may simply cancel.
+
+**The harness can answer this** — `study format --blur-bias ... --blur-reference ...` puts a blur-driven diameter bias into both formats, and the blur term is already keyed to image speed in pixels per frame, which captures the format difference automatically. Until that is run, the honest statement is: **4K/120 is better on static diameter precision by a clear margin, and 1080p/240 has a blur advantage of similar size that has not been measured.**
+
+**One thing in the invalid run was real and worth keeping.** The speed error differed between formats, −0.34% against −0.72%, and that is the launch-time origin defect of 3.5 behaving exactly as predicted: `--skip-frames 3` is 12.5 ms at 240 fps but 25 ms at 120 fps, so the defect is **half as large at 240 fps**. It survives in the corrected run too. An independent confirmation of 3.5 from a study that was not looking for it — and a reminder that until 3.5 is fixed, **the speed column of every format comparison is contaminated by a frame-rate-dependent offset**, which is its own reason to fix 3.5 before settling the format question.
+
+**A distance study was attempted and mis-specified.** Sweeping camera distance at 5 m and 20 m with *fractional* diameter noise showed nothing — speed and gravity errors were identical at both distances — because fractional noise holds relative error constant by construction, which is precisely the flaw that invalidated the first format study. Distance matters because a **fixed pixel** error becomes a larger relative error on a smaller ball. A `study distance` mode using `--distance-noise-px` was added to measure it properly; not yet run.
+
+**Rung 10 — the format comparison with blur modelled, and it reverses the answer.** Same study, with a blur-driven diameter bias active in both formats:
+
+| format | speed err ± sd | gravity err ± sd | residual |
+|---|---|---|---|
+| 1080p/240 | +0.04 ± 0.10 | **+0.41** ± 0.08 | 4.1 mm |
+| 4K/120 | +0.81 ± 0.08 | **+1.55** ± 0.06 | 2.5 mm |
+
+**4K/120 suffers roughly four times the blur bias**, and the factor is derivable rather than fitted: the blur term keys on image speed in pixels per frame, which is **14.4 px/frame at 1080p/240 against 57.4 at 4K/120** — `fx` is doubled *and* the interval between frames is doubled. The observed ratio, 1.55 against 0.41, is 3.8.
+
+**So the two formats trade off, and the trade is structural:**
+
+| | 4K/120 | 1080p/240 |
+|---|---|---|
+| random scatter | **better**, ~1.3–1.6× | |
+| blur-induced bias | | **better**, ~4× |
+
+**Which wins depends on how severely blur actually degrades this detector's box — a measurable property that has never been measured.** That is real progress on the open question: it stops being an argument about samples versus pixels and becomes an empirical question about the detector. One data point exists and it is not encouraging for 4K — the box collapsed from 58.4 to 42.9 px, a 26% shrink, as confidence fell to 0.34 coming off the boot. If blur bias is anywhere near that severe, 1080p/240 wins decisively; if it is mild, 4K's precision advantage carries.
+
+**Rung 11 — the distance study, and it contradicts the guardrail's stated basis.** Diameter noise at 0.5 px, swept across camera distance:
+
+| distance | ball | relative error | speed sd | gravity sd | residual |
+|---|---|---|---|---|---|
+| 5 m | 103.9 px | 0.48% | 0.03% | 0.03% | 1.3 mm |
+| 10 m | 51.9 px | 0.96% | 0.06% | 0.05% | 1.6 mm |
+| 12 m | 43.3 px | 1.16% | 0.08% | 0.06% | 1.7 mm |
+| 20 m | 26.0 px | 1.93% | 0.13% | 0.11% | 2.3 mm |
+| 27 m | 19.2 px | 2.60% | 0.18% | 0.14% | 2.8 mm |
+
+**There is no cliff, and the absolute numbers are tiny.** Error grows linearly with distance, exactly as the relative-error column does, and even at 27 m — where a whole 40 m flight would fit in frame — speed scatter is **0.18%**. *Pixels on the ball* argues that "half a pixel of error on a 9.6 px ball is 5%, and it propagates into every metric." The first half is right and the second does not follow.
+
+**The reason is the range smoothing, and it is the most useful thing in this study.** `reconstruct()` fits a straight line through the per-frame ranges rather than using them individually, so **random diameter noise is suppressed by √N across the fit window.** Predicted against observed:
+
+| distance | per-sample relative error | ÷√348 | observed sd |
+|---|---|---|---|
+| 5 m | 0.48% | 0.026% | 0.03% |
+| 12 m | 1.16% | 0.062% | 0.08% |
+| 27 m | 2.60% | 0.139% | 0.18% |
+
+⚠️ **Random diameter error is averaged away. Systematic diameter error is not.** That is why a 6% progressive bias wrecks the fit while 2.6% random noise barely registers, and it is the single clearest statement of why **3.1 is the priority and noise is not**.
+
+**What this does not say.** The study models random noise only. The real risks of standing further back are **detection failure** — at 640 input a 57 px ball becomes 9.5 px and is not found at all — and **systematic bias growing as the box gets smaller**, neither of which is modelled here. The 5–12 m guardrail may well be right; what this shows is that its stated justification, an accuracy lottery from too few pixels, is not the mechanism. **Not corrected in the guardrail table, for the same reason as the off-square rationale: what should replace it is a measurement not yet taken.**
+
+**Rung 12 — a systematic bias, held constant, across distance.** Same sweep with a 6% recession bias at 15° off-square:
+
+| distance | ball | speed err | gravity err | residual |
+|---|---|---|---|---|
+| 5 m | 103.9 px | +4.79% | +4.13% | 50.8 mm |
+| 12 m | 43.3 px | +4.92% | +3.86% | 50.5 mm |
+| 27 m | 19.2 px | +5.32% | +3.74% | 50.6 mm |
+
+**A systematic bias costs the same at every distance.** The residual is flat at 50.6 mm from 5 m to 27 m, and the errors vary by less than half a percentage point — gravity actually *improves* slightly with distance. Only the random spread grows, from 0.15 to 0.34, as the earlier study showed.
+
+**So distance does not amplify a given relative bias**, and combined with rung 11 this closes out the physics side of the guardrail question: **neither random noise nor systematic bias gets meaningfully worse with distance.** Everything left that could justify the 5–12 m guardrail is a property of the *detector* — whether its bias fraction grows as the ball shrinks, and whether it stops finding the ball at all. No synthetic study can reach either, which the tool now says in its own output.
+
+Remaining use, not yet exercised: whether the detector's bias fraction grows with apparent ball size, which is the last thing standing between here and a justified filming distance.
 
 **2.2 Settle the 1080p focal length.** *(was Step 6)* Measure a distance to a stationary ball with a tape, film it at rest in both formats without moving the phone, and solve `fx = d · Z / D` for each. The 4K value is confirmed exactly; the 1080p value is 5.1% out and it is not known whether that is the lens or a sloppy pace — see *Camera capability*. It belongs here rather than later because no correction should be fitted on top of a possible 5% scale error. `shot-list.txt` now opens with this shot.
 
@@ -682,9 +955,19 @@ The 1.7 s first prediction is one-time warm-up and must not be mistaken for thro
 
 **3.1 Correct the progressive under-read in the detector's flight diameters.** *(was Step 5)* Fitted gravity averages 7.7 across nine clips, or 8.3 across the seven not flagged suspect, rather than 9.81, and this is the cause — see *The gravity discrepancy*. It can be corrected on either side of the export since the boxes match to 0.00%, subject to 1.1.
 
+**Start by classifying the clips rather than correcting them.** The synthetic work of 2.1 established that a *uniform* diameter error and a *progressive* one have different signatures, need different fixes, and are told apart by the **vertical residual** together with how the error moves with window length. It also showed that a 6% progressive bias over kick 11's real 0.87 s window reproduces both its 3.2 mm residual and its −5.9% gravity error. So the first step is to tabulate residual, window length and fitted gravity across all nine clips and see which pattern each fits — the pipeline already computes every one of those numbers and nothing currently reads them together.
+
+⚠️ **Do not rank clips by fitted gravity.** It is not a severity measure across clips of different flight durations: the same defect reads −10.9% at 0.10 s and +5.6% at 2.90 s. The spread of 4.40 to 10.48 across the 2026-08-22 set is partly a spread of window lengths. **The residual is the honest indicator** — it grows with the bias and never changes sign.
+
 **3.2 Diagnose kick 7**, which acquires for a single frame and collapses.
 
 **3.3 Diagnose kick 10**, which detects correctly but whose track only starts near the end of the clip.
+
+**3.5 Report launch conditions at ball–boot separation, not at the start of the fit window.** Found by the synthetic harness on 2026-08-24 and described in full under *The launch-time origin defect*. `fit_launch()` evaluates at the window start, `contact + --skip-frames`, so vertical velocity is under-reported by `g · Δt` — 0.245 m/s at the defaults, 0.899 m/s on a clip needing `--skip-frames 11`. Carry and apex compound it by taking their height from the ball at rest while taking their velocity from several frames later: **carry −2.26%, apex −4.46%** on the synthetic kick.
+
+The fix is to evaluate the fitted trajectory at the separation instant, recovering **both** velocity and height there from the same fit, rather than shifting velocity alone. Cheap in Python, and 4.3 would otherwise port the defect into Swift.
+
+**This item has something none of the others do: an exact pass/fail test.** `synth_track.py check` states the true answer, so the fix either recovers 25.00 m/s at 35.00° or it does not. Note also that **the gravity self-check cannot verify it** — gravity is invariant to a shift of time origin, which is why the defect survived nine clips of real footage.
 
 **3.4 End the fit window on a net impact and on the ball leaving the frame.** `find_landing()` detects only a bounce — a reversal in vertical image position after the apex — so it cannot see either of the two ways a flight normally ends in real use; see *Measurement Approach → Truncated flight is the normal case*. This is the same class of defect as the bounce-window bug that produced the gravity discrepancy: a window containing something that is not free flight, failing silently rather than visibly. It belongs in this section because it is physics work, it is fixed in Python where iteration is fast, and it must be right before 4.3 ports the fit to Swift.
 
@@ -792,7 +1075,20 @@ Most of the pipeline is kick-agnostic — it measures a ball's launch conditions
 
 **The pipeline now measures the thing that decides this.** `compute_metrics.py` reports range scatter about the fitted trend and fitted gravity, both of which degrade with depth noise. Running the same analysis across the 1080p and 4K sets answers the question empirically rather than by argument.
 
-**One comparison has been run and it was not valid.** At `--imgsz 1280`, 1080p showed 3.7% relative diameter scatter against 4K's 4.4%, suggesting 4K was no better. But that setting downscales a 1920-wide frame by 0.67× and a 3840-wide frame by 0.33× — 4K was handicapped by twice as much. A fair test needs both at native resolution, which is now the default. **The question remains open.**
+**One comparison has been run and it was not valid.** At `--imgsz 1280`, 1080p showed 3.7% relative diameter scatter against 4K's 4.4%, suggesting 4K was no better. But that setting downscales a 1920-wide frame by 0.67× and a 3840-wide frame by 0.33× — 4K was handicapped by twice as much. A fair test needs both at native resolution, which is now the default.
+
+**The synthetic harness has since answered the structure of this question, though not yet the value.** Measured 2026-08-24 on the *same* kick, which no filming session can do — see punch list item 2.1, rungs 9 to 11:
+
+- **On random precision, 4K/120 wins** by about 1.3–1.6× on every column, because twice the pixels across the ball beats twice the temporal samples.
+- **On blur-induced bias, 1080p/240 wins by about 4×**, and that factor is structural rather than fitted: the ball moves 14.4 px per frame at 1080p/240 against 57.4 at 4K/120, since `fx` is doubled *and* the frame interval is doubled.
+
+**Measured 2026-08-24, and the answer is that the format is not the variable — the light is.** See *The detector's blur response*.
+
+Relative blur is `v · exposure / D`. The focal length **cancels**, so at a given exposure both configurations smear the ball by the same fraction of its own width. 240 fps reduces blur only when exposure is capped by the frame interval, which happens as light falls — and by then relative blur is 61% at 240 fps and 121% at 120 fps, both far past the ~29% at which the detector stops finding the ball at all. **In poor light neither format works.**
+
+**So, provisionally: 4K/120.** In light good enough for the pipeline to function, blur is equal in relative terms and 4K's extra pixels win on precision — measured at roughly 1.3–1.6× better scatter on every column. An earlier note here claimed 1080p/240 had a structural ~2× blur advantage; that is wrong, and it came from forgetting that `fx` cancels.
+
+⚠️ **Two things keep this provisional rather than settled.** The launch-time origin defect of 3.5 contaminates the speed column with a frame-rate-dependent offset, so a format comparison is not clean until that is fixed. And whether the detector's *bias* grows as the ball shrinks has not been measured, which is the one remaining mechanism that could favour 4K further or undercut it.
 
 **Pixels on the ball, and why filming distance dominates accuracy**
 
@@ -806,7 +1102,11 @@ Range is recovered from apparent diameter: `Z = fx × D / d`. Run backwards, tha
 | 27 m | 9.6 px | 19 px |
 | 40 m | 6.5 px | 13 px |
 
-Relative range error tracks relative diameter error one for one. Half a pixel of error on a 70 px ball is 0.7%; the same half pixel on a 9.6 px ball is 5%, and it propagates into every metric.
+Relative range error tracks relative diameter error one for one. Half a pixel of error on a 70 px ball is 0.7%; the same half pixel on a 9.6 px ball is 5%.
+
+⚠️ **The last clause of that sentence used to read "and it propagates into every metric", and measurement has shown it does not — for *random* error.** `reconstruct()` fits a straight line through the per-frame ranges rather than using them individually, so random diameter noise is suppressed by √N across the fit window. Measured 2026-08-24, speed scatter is 0.03% at 5 m and only **0.18% at 27 m**, where the ball is 19 px — a linear, gentle degradation with no cliff anywhere in the range. See punch list item 2.1, rung 11.
+
+**What does propagate into every metric is *systematic* diameter error**, which no amount of averaging touches. That distinction is the reason 3.1 is the priority and noise is not, and it is why the argument below — that distance is the dominant accuracy parameter — needs restating in terms of bias and of detection failure rather than of pixel scatter.
 
 **The geometry traps you.** With a 74.6° field of view, framing a 40 m flight means standing about 26–27 m back. At that range the ball is under 10 px at 1080p. Whole flight in frame and a well-resolved ball are in direct conflict, and no technique resolves it — only a longer lens or a second camera would.
 
@@ -939,6 +1239,76 @@ Kick 11 is the deliberate off-square control the shot list called for — roughl
 
 Camera distance is the dominant accuracy parameter (see *Pixels on the ball* above) and pacing it out, as was done here, should be standard.
 
+**The launch-time origin defect — found by the synthetic harness, 2026-08-24**
+
+**`fit_launch()` reports velocity at the start of the fit window, and the pipeline labels it "LAUNCH (measured)".** The window begins at `contact + --skip-frames`, so the reported velocity is the ball's velocity some frames *after* it was struck. Gravity has been acting for that whole interval, so the vertical component is under-reported by exactly `g · Δt`.
+
+Verified arithmetically on the synthetic run: contact detected at frame 61, `--skip-frames 3`, so the fit's origin is frame 64 against a true launch at frame 60. Four frames at 120 fps is 0.0333 s, and `14.3394 − 9.81 × 0.0333 = 14.0124` against a recovered **14.0129**. The fit is not wrong; the *time it is evaluated at* is.
+
+**What it costs, by configuration:**
+
+| skip | rate | interval | vy under-read by |
+|---|---|---|---|
+| 3 | 120 fps | 25.0 ms | 0.245 m/s |
+| 3 | 240 fps | 12.5 ms | 0.123 m/s |
+| 11 | 120 fps | 91.7 ms | **0.899 m/s** |
+
+`--skip-frames 11` is not hypothetical — it is what kick 11 needed, because the detector lost the ball off the boot for twelve frames.
+
+**A second defect is coupled to it, and this one is unambiguous.** Carry and apex are computed with `launch_height` defaulting to one ball radius, 0.103 m — the ball at rest on the grass. But the velocity handed to them is the velocity at the *window start*, by which time the ball has climbed 0.47 m. The model therefore takes its speed from one moment and its height from another. On the synthetic kick:
+
+| | carry | apex |
+|---|---|---|
+| true launch — 25.00 m/s, 35.00°, h 0.103 | 60.02 m | 10.58 m |
+| what the pipeline reports | 58.66 m | 10.11 m |
+| error | **−2.26%** | **−4.46%** |
+
+⚠️ **The gravity self-check cannot see any of this, and that is why it survived.** Gravity is the quadratic coefficient of the fit, and a quadratic's curvature is invariant under a shift of time origin. So the project's only independent check is structurally blind to this defect — nine clips of real footage could never have revealed it, and no amount of further footage would. **This is the argument for the synthetic harness in one example.**
+
+**One honest complication before fixing it.** `--skip-frames` exists to drop frames while the ball is still deforming against the boot, and during genuine boot contact the ball is *not* in free flight, so velocity measured there would not be launch velocity either. Real boot contact is roughly 8–10 ms — about one frame at 120 fps. The defaults skip 3, and kick 11 skipped 11. So the pipeline over-skips relative to actual ball-boot separation and under-reports as a result; the synthetic model, which has no deformation phase at all, exposes the full offset rather than the excess. **The fix is to extrapolate the fitted trajectory back to the moment the ball leaves the boot — recovering both velocity and height at that instant from the same fit — not simply back to the detected contact frame.**
+
+**The detector's blur response — measured 2026-08-24, and it is the most practically consequential result of the day**
+
+`export_coreml.py blur` applies synthetic horizontal motion blur to the ball **at rest**, where the true diameter is known and nothing else changes. Real footage cannot do this: in a real flight the ball recedes and blurs together and the two are hopelessly confounded, which is much of why the diameter bias has resisted diagnosis.
+
+| blur | diameter | error | confidence | implied range |
+|---|---|---|---|---|
+| 1 px | 58.28 px | +0.0% | 0.96 | 8.91 m |
+| 4 px | 58.02 px | −0.5% | 0.96 | 8.95 m |
+| 8 px | 59.38 px | **+1.9%** | 0.94 | 8.75 m |
+| 12 px | 61.04 px | **+4.7%** | 0.73 | 8.51 m |
+| 17 px | **NOT FOUND** | — | — | — |
+| 25 px and beyond | **NOT FOUND** | — | — | — |
+
+**Three findings, in increasing order of importance.**
+
+**1. Blur inflates the box; it does not shrink it.** This reverses an assumption recorded above as settled. A larger box means diameter over-read, range *under*-estimated, and distances too short — the opposite sign to the recession bias. The earlier "the box shrinks" observation was taken at contact, where the ball is partly behind the boot: **that was occlusion, not blur.**
+
+**2. The detector over-reads a sharp, resting ball by about 2.6%.** Geometry predicts 56.82 px at 9.14 m through `fx` 2520; the detector returns 58.28 px at confidence 0.96. That is a **uniform** scale error, and by the signatures established in 2.1 it is invisible in the residual and shows up directly in fitted gravity — biasing every distance short by 2.6%.
+
+**3. Detection fails entirely at 17 px of blur, and that is the finding that matters.** The ball is found at 12 px of smear — 20.6% of its own width, confidence already down to 0.73 — and is **not found at all** at 17 px, 29.2%. Somewhere between a fifth and a third of the ball's width, the detector stops seeing a football.
+
+⚠️ **This is a light-level constraint, and it is severe.** Relative blur is `v · exposure / D`, so it depends on the ball's speed and the exposure and **not at all on the format**. To stay under 20% relative blur:
+
+| ball speed | exposure required |
+|---|---|
+| 13 m/s | 1/315 s |
+| 20 m/s | 1/485 s |
+| 30 m/s | **1/728 s** |
+
+**And the frame interval alone is nowhere near enough.** If exposure runs to the full frame interval — which is what happens as light falls — relative blur is:
+
+| | 13 m/s | 30 m/s |
+|---|---|---|
+| 120 fps | 53% | **121%** |
+| 240 fps | 26% | **61%** |
+
+Every one of those is at or beyond the failure threshold. **In poor light this pipeline does not degrade, it stops working**, and 240 fps does not save it. The app must therefore either verify a short exposure at capture time or warn the coach, and neither exists.
+
+**This also explains why the first footage looked so clean.** It was shot in bright sun at ~13 m/s, where relative blur is small enough that panel detail was legible — a case this document already recorded as retiring the blur risk "at that speed and in that light only." That caution was right, and the risk is now quantified rather than merely flagged.
+
+**What it means for the format question is that the format is not the variable.** Because `fx` cancels, both configurations smear the ball by the same fraction of its own width at a given exposure. 240 fps helps only when exposure is capped by the frame interval — that is, only in poor light, and by then both formats are past the failure threshold anyway. See *Which capture configuration gives better metric accuracy*.
+
 **The gravity discrepancy — two causes found, one fixed, one located**
 
 `compute_metrics.py` fits gravity from the data rather than assuming it. Nothing tells the fit that gravity is 9.81; the value falls out of the pixel scale, the frame timestamps and the 3D reconstruction alone. It is the only independent check the pipeline has, and for most of this project's life it did not land.
@@ -966,6 +1336,8 @@ The quadratic term the fit calls "gravity" has two contributors: real image curv
 
 But the control kick was filmed **56.5° off perpendicular** — nearly four times the guardrail — with `vz` at +10.95 m/s, which is the most adverse geometry in the entire dataset. It fitted gravity to within 1.5% anyway. Whatever the cross-term costs, it is second order next to the window.
 
+**The synthetic harness has since explained why, and the answer is sharper than "second order."** Run at 30° off-square with exact diameters, gravity comes back to **−0.00%** and `vz` to +0.01% — the same as square on. The pipeline reconstructs depth per frame rather than assuming it, so the out-of-plane component is *recovered*, not lost. **The cross-term is therefore not a geometric penalty at all; it is an amplifier of depth error.** With accurate diameters there is nothing for it to amplify, which is exactly why the control kick survived its geometry. It also means the cross-term and the flight-diameter bias are not two problems but one: fix the diameters and the cross-term stops mattering. See punch list item 2.1.
+
 **The whole set has since been run, and the window was not the only problem.** Fitted gravity across the nine clips that produce metrics runs from **4.40 to 10.48**, mean **7.73**. Excluding the two the tool itself flags SUSPECT — kicks 1 and 8 — the remaining seven run 7.01 to 10.48, mean **8.34**.
 
 Quote whichever is relevant but say which: the nine-clip mean is the honest headline, the seven-clip mean is what the pipeline achieves when it does not visibly fail. Both are well short of 9.81 and short in the same direction, which is the finding. Regenerate them rather than trusting these figures — see *Reproducing the current results*.
@@ -978,7 +1350,7 @@ The fit is *internally* consistent, which is why this hid for so long: with `vy`
 
 | Suspect | Verdict |
 |---|---|
-| Motion blur inflating the detector box | **Refuted** — the box *shrinks*, 58.4 → 42.9 px as confidence falls to 0.34 |
+| Motion blur inflating the detector box | ⚠️ **That refutation is itself wrong — see *The detector's blur response* below.** It rested on the box shrinking 58.4 → 42.9 px as confidence fell to 0.34, but those frames are at contact, where the ball is partly behind the boot and the kicker's leg. That is **occlusion, not blur.** Measured in isolation on a resting ball, blur *inflates* the box — +1.9% at 8 px of smear and +4.7% at 12 px |
 | Air resistance biasing a drag-free fit | **Refuted** — fitting against the drag ODE moved gravity only 7.65 → 7.74 |
 | Camera tilt / wrong principal point | **Refuted** — gravity is provably invariant to `cy0`, which contributes `cy0·Z/fx`, and `Z` is linear in time, so it can only add a linear term |
 | Anchoring range to the resting diameter | **Tried and worse** — see below |
@@ -994,6 +1366,10 @@ h = D·(cy₁ − cy₂)/(d₁ − d₂)
 Working the geometry backwards on kick 9: the resting diameter is right, within a percent or so of the 56.8 px the paced 9.14 m predicts, while the landing diameter is under-read by **roughly 6–9%** — 37.0 px measured against the 39.5–40.6 the flat-pitch constraint demands, depending which resting frame is taken as the reference.
 
 So the detector's box degrades as the ball recedes and blurs. **The horizontal survives it because `X` uses `D/d` directly, where a 6% error stays 6%. The vertical goes through the range slope, where the cross-term `2·u̇·Ż/fx` amplifies it.** That is the same cross-term this document has named since the beginning — now with a cause rather than only a magnitude.
+
+**Confirmed synthetically 2026-08-24, with one important qualification.** Injecting a 6% progressive under-read into a known trajectory does exactly this: the residual rises from 1.19 mm to 40.60 mm and every recovered quantity moves by 3.6–9.2%. But **the sign of the gravity error depends on the length of the fit window** — a progressive depth inflation multiplies the parabola by a growing factor, injecting a cubic term that drags gravity down over short windows and pushes it up over long ones, crossing over near two seconds. The real clips all fit well under that, which is why they read low.
+
+Two things follow for the work in 3.1. **Fitted gravity is not a severity measure across clips of different durations** — comparing 4.40 against 10.48 is partly comparing flight times, not just how badly each is biased. And **the vertical residual is the better indicator**: a factor of 34 here, and unlike gravity it never changes sign, because a quadratic simply cannot describe a cubic. Nothing in the pipeline currently reads the residual as a bias indicator, and it is the cheapest signal available.
 
 **Anchoring the range line to the resting diameter followed obviously and was wrong.** A free fit spreads the flight bias between intercept and slope; anchoring the intercept forces the *slope* to absorb all of it, and the slope is what gravity is most sensitive to. Measured across the set it moved gravity the wrong way on nearly every clip — 8.13 → 6.11, 7.37 → 6.16, 7.01 → 6.25, 9.49 → 8.28 — while improving carry slightly. Kept as `--rest-anchor`, off by default, so the experiment can be repeated rather than re-argued.
 

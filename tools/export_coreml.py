@@ -345,6 +345,132 @@ def run_dump(args) -> None:
     print("against the most-confident box, or apply NMS first.")
 
 
+def run_blur(args) -> None:
+    """How the detector's box responds to motion blur, in isolation.
+
+    THE QUESTION THIS SETTLES
+
+    1080p/240 and 4K/120 trade off against each other and the trade is
+    structural. Measured synthetically (project_notes.md item 2.1, rung 10):
+    4K/120 wins on random precision by about 1.4x, because it puts twice as
+    many pixels across the ball; 1080p/240 wins on blur-induced bias by
+    about 4x, because the ball moves 14.4 px per frame there against 57.4
+    at 4K/120 -- fx is doubled AND the frame interval is doubled.
+
+    Which advantage dominates depends on ONE number nobody has measured:
+    how severely blur degrades this detector's bounding box. That is what
+    this measures.
+
+    WHY SYNTHETIC BLUR ON A STILL FRAME, RATHER THAN REAL FOOTAGE
+
+    In a real flight the ball recedes and blurs at the same time, and both
+    shrink the box. The two effects are hopelessly confounded -- which is
+    exactly why the diameter bias has resisted diagnosis for so long. Here
+    the ball is at rest at a known 9.14 m with a known true diameter of
+    58.28 px, and the ONLY thing that changes is the blur. Whatever the box
+    does is the blur doing it.
+
+    Blur is applied as a horizontal box filter, which is what a linear
+    motion across the sensor during an exposure actually produces.
+
+    WHAT MATTERS IS BLUR RELATIVE TO THE BALL, AND fx CANCELS OUT
+
+        blur_px  = (fx * v / Z) * exposure
+        ball_px  =  fx * D / Z
+        ratio    =  v * exposure / D          <- no fx
+
+    So a format's focal length does NOT affect how blurred the ball looks
+    relative to its own size. Only the exposure does. At 30 m/s with a
+    Size 4 ball:
+
+        exposure           4K/120   1080p/240
+        1/1000 s bright      15%        15%      <- identical
+        1/500 s              29%        29%      <- identical
+        frame-limited       121%        61%      <- 240 fps wins
+
+    This corrects an earlier claim that 1080p/240 has a structural ~2x
+    blur advantage. It has that advantage ONLY when exposure is capped by
+    the frame interval, which means only in poor light. In bright sun both
+    formats blur the ball equally in relative terms, and 4K's extra pixels
+    win on precision with nothing to offset them.
+
+    Which makes the light the deciding variable, not the format -- and it
+    fits the one real observation on record: first footage in bright sun
+    at ~13 m/s showed panel detail legible on a ~70 px ball, meaning the
+    exposure was far shorter than the frame interval.
+    """
+    import cv2
+    import numpy as np
+    from ultralytics import YOLO
+
+    source = Path(args.crop)
+    if not source.exists():
+        sys.exit(f"{source} not found. Run `dump` first.")
+
+    image = cv2.imread(str(source))
+    if image is None:
+        sys.exit(f"Could not read {source}")
+
+    model = YOLO(args.model)
+
+    print(f"Blur response of {args.model} on {source.name}")
+    print(f"True diameter {args.truth:.2f} px, from a ball at rest.")
+    print()
+    print("Blur is a horizontal box filter, the shape a linear motion")
+    print("across the sensor during one exposure actually produces.")
+    print()
+    print(f"{'blur px':>9}{'diameter':>11}{'error':>10}{'confidence':>12}"
+          f"{'implied range':>15}")
+
+    ball_m = args.ball_mm / 1000.0
+    lengths = [int(v) for v in args.lengths.split(",")]
+    for length in lengths:
+        if length <= 1:
+            blurred = image
+        else:
+            kernel = np.zeros((length, length), dtype=np.float32)
+            kernel[length // 2, :] = 1.0 / length
+            blurred = cv2.filter2D(image, -1, kernel)
+
+        found = biggest_ball(model, blurred, CROP)
+        if found is None:
+            print(f"{length:9d}{'NOT FOUND':>11}{'--':>10}{'--':>12}{'--':>15}")
+            continue
+
+        diameter, confidence = found
+        error = 100 * (diameter / args.truth - 1)
+        implied = args.fx * ball_m / diameter
+        print(f"{length:9d}{diameter:10.2f}px{error:+9.1f}%{confidence:12.2f}"
+              f"{implied:14.2f}m")
+
+    print()
+    print(f"For reference, the ball was actually at {args.distance:.2f} m.")
+    print()
+    print("HOW TO READ THIS")
+    print()
+    print("  A box that SHRINKS with blur under-reads diameter, which")
+    print("  over-estimates range, which is the sign of the bias believed")
+    print("  to drive the gravity discrepancy. A box that GROWS would mean")
+    print("  the opposite and would refute it.")
+    print()
+    print("  Then convert to a format verdict. At 30 m/s and 9.14 m, blur")
+    print("  on THIS 4K crop, where the ball is 56.8 px, is roughly:")
+    print("      1/1000 s, bright sun      8 px")
+    print("      1/500 s, overcast        17 px")
+    print("      1/120 s, frame-limited   69 px")
+    print()
+    print("  Relative blur is v*exposure/D and fx cancels, so 1080p/240")
+    print("  does NOT blur less in bright light -- both formats see the")
+    print("  same fraction of the ball smeared. 240 fps only helps when")
+    print("  exposure is capped by the frame interval, i.e. in poor light,")
+    print("  where it halves the exposure and so halves the blur.")
+    print()
+    print("  So: if the error stays small out to ~8-17 px, blur is not a")
+    print("  problem in daylight and 4K/120 wins on pixels alone. If it")
+    print("  degrades sharply in that range, the format choice becomes a")
+    print("  light-level decision rather than a fixed one.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Export the detector to Core ML and verify it.",
@@ -400,6 +526,27 @@ def build_parser() -> argparse.ArgumentParser:
                            "the same four frames the crop architecture was "
                            "measured on")
     dump.set_defaults(func=run_dump)
+
+    blur = sub.add_parser("blur",
+                          help="how the detector's box responds to motion blur")
+    blur.add_argument("--crop",
+                      default="tools/frames/ane-inputs/"
+                              "crop-f00620-x2858-y1298.png",
+                      help="a crop of the ball AT REST; the resting frame is "
+                           "the only one whose true diameter is known")
+    blur.add_argument("--model", default=DEFAULT_MODEL)
+    blur.add_argument("--truth", type=float, default=58.28,
+                      help="true diameter in px for that crop (default "
+                           "58.28, measured 2026-08-24)")
+    blur.add_argument("--lengths", default="1,4,8,12,17,25,35,50,69",
+                      help="blur lengths in px, on a 56.8 px ball. The "
+                           "defaults bracket real exposures at 30 m/s: 8 px "
+                           "is bright sun at 1/1000 s, 17 px is overcast at "
+                           "1/500 s, 69 px is frame-limited at 1/120 s")
+    blur.add_argument("--ball-mm", type=float, default=206.1)
+    blur.add_argument("--fx", type=float, default=2520.0)
+    blur.add_argument("--distance", type=float, default=9.14)
+    blur.set_defaults(func=run_blur)
 
     return parser
 
