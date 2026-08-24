@@ -117,6 +117,11 @@ Measurement is being developed as Python on the Mac before anything is ported to
 - `tools/extract_frames.py` — verify real frame timing, locate the kick, dump frames
 - `tools/detect_ball.py` — YOLO detection, background registration, continuity gating; writes a per-frame CSV
 - `tools/compute_metrics.py` — 3D reconstruction, trajectory fit, landing detection, both flight models
+- `tools/validate.py` — checks the results against ground truth: observed carry against paced landings, camera height as an independent scale check, and a principal-point sweep kept as a negative result
+- `tools/export_coreml.py` — Core ML conversion, verification against the original weights, and the crop-versus-full-frame measurement that chose the on-device architecture
+- `tools/sessions/*.csv` — which clip is which kick, and how far each one actually landed
+
+The per-frame tracks in `tools/frames/*-track.csv` are committed. The footage they came from is not in this repository, so the tracks are what keeps the physics reproducible.
 
 The CSV is the interface between detection and physics, so the arithmetic can be re-run in a second without paying for the model again.
 

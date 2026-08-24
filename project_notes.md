@@ -276,7 +276,11 @@ Measurement is being developed in Python on the Mac before anything is ported to
 
 **They are deliberately not backed up, and that is a decision rather than an oversight.** Raised on 2026-08-24 and accepted: the footage is a single copy on the Mac's Desktop, and the project carries the risk of losing it. Do not propose committing them to git, adding LFS, or building a sync — the question has been asked and answered.
 
-What that means in practice: if the clips go, the *tracks* survive as `tools/frames/*-track.csv`, which is enough to re-run every physics result, because the CSV is the interface between detection and physics. What would be lost is the ability to re-run *detection* — so any detector change after that point could not be validated against the paced landings without filming a new session. `shot-list.txt` exists to make that reshoot repeatable.
+**What makes that acceptable is that the per-frame tracks are committed.** `tools/frames/*-track.csv` is tracked deliberately — the PNGs and contact sheets in the same directory are not, because they are large and regenerable. The tracks are small text, they are the interface between detection and physics, and committing them means every physics result stays reproducible with no footage at all.
+
+So losing the clips costs the ability to re-run *detection*, not the ability to re-run the maths. Any detector change after such a loss could not be validated against the paced landings without filming again, which is what `shot-list.txt` exists to make repeatable.
+
+**This only works because the tracks are in git.** They were not until 2026-08-24 — `tools/frames/` was ignored wholesale, and this section claimed the fallback while the fallback did not exist. If a future `.gitignore` change re-ignores them, the backup decision above stops being reasonable.
 
 **The CSV is the interface between detection and physics**, so the arithmetic can be re-run in a second without paying for the model again.
 

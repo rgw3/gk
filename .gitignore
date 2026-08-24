@@ -27,7 +27,17 @@ playground.xcworkspace
 # Mac-side tooling for the tracking spike. The scripts are tracked; the
 # environment and their output are not.
 tools/.venv/
-tools/frames/
+# Extracted frames, contact sheets and annotated PNGs -- all large and
+# all regenerable from the clips.
+tools/frames/*
+
+# But NOT the per-frame tracks. They are small text, they are the
+# interface between detection and physics, and they are what keeps
+# every physics result reproducible if the clips are lost -- which is
+# a real possibility, since the footage is a single unbacked-up copy
+# on the Desktop. See project_notes.md under Analysis pipeline.
+!tools/frames/
+!tools/frames/*-track.csv
 
 # Pre-trained model weights. Ultralytics downloads these on first run, so
 # they are reproducible rather than source.
