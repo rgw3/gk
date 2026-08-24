@@ -272,7 +272,11 @@ Measurement is being developed in Python on the Mac before anything is ported to
 
 **The kick-to-file mapping lives in `tools/sessions/2026-08-22.csv`, not in this document.** Landing distances quoted here by kick number are meaningless without it, and prose is the wrong place for a lookup table that code also has to read. `validate.py` reads it directly, so the numbers in this file and the numbers the tools produce cannot drift apart.
 
-> ⚠️ **The clips are not in this repository.** Eleven files, about 1.3 GB, at `~/Desktop/clips/`. Nothing under `tools/` can be reproduced without them — every command in *Next Steps → Step 5* will fail with no useful explanation if they are missing or moved. They are the only copy and they are not backed up anywhere the repository knows about.
+> ⚠️ **The clips are not in this repository.** Eleven files, about 1.3 GB, at `~/Desktop/clips/`. Nothing under `tools/` can be reproduced without them — every command in *Next Steps → Step 5* will fail with no useful explanation if they are missing or moved.
+
+**They are deliberately not backed up, and that is a decision rather than an oversight.** Raised on 2026-08-24 and accepted: the footage is a single copy on the Mac's Desktop, and the project carries the risk of losing it. Do not propose committing them to git, adding LFS, or building a sync — the question has been asked and answered.
+
+What that means in practice: if the clips go, the *tracks* survive as `tools/frames/*-track.csv`, which is enough to re-run every physics result, because the CSV is the interface between detection and physics. What would be lost is the ability to re-run *detection* — so any detector change after that point could not be validated against the paced landings without filming a new session. `shot-list.txt` exists to make that reshoot repeatable.
 
 **The CSV is the interface between detection and physics**, so the arithmetic can be re-run in a second without paying for the model again.
 
@@ -293,6 +297,10 @@ Tolerance is **1.3**, not 1.5. At 1.5 a spare ball 6.8 m away measured 76.8 px a
 The gate applies **only at acquisition**. The ball recedes from 9 m to 24 m during one measured flight, so enforcing it throughout would throw the flight away; the continuity and size-ratio checks carry the track once it is locked.
 
 **`compute_metrics.py` cuts the fit at the landing and fits against drag.** `find_landing()` finds the reversal in vertical image position after the apex, working purely in image space so it needs no scale, focal length or depth. `fit_launch_with_drag()` integrates the drag ODE from a trial launch state and refines by Gauss-Newton with a numerical Jacobian — seven free parameters, gravity among them, because pinning gravity at 9.81 would trade away the only independent check the pipeline has. The drag-free parabola is still computed and printed alongside.
+
+**`--skip-frames` defaults to 3 and that is sometimes not enough.** It drops samples after contact while the ball is still deforming against the boot. On kick 11 the detector lost the ball entirely for twelve frames coming off the boot, and the default started the fit inside that blur, where the box is unreliable and therefore so is diameter and therefore so is range. Starting at the first frame with a real lock — `--skip-frames 11` on that clip — was what produced the first passing gravity check.
+
+No rule has been derived for this, deliberately: one clip is not enough to invent a heuristic from, and inventing one would fit this pitch rather than the problem. If it recurs across a second session, the rule should be to start at the first sample after the largest detection gap in the first fifth of a second. **Until then, if a clip's gravity looks poor, check what frame the fit starts on before assuming the physics is wrong.**
 
 **`--contact-threshold` defaults to 0.3 of peak speed, not 0.15.** A ball resting on grass is not motionless in the image: handheld drift ran 250–390 px across the 2026-08-22 clips, and what registration leaves behind clears a 15% bar for three frames. Two clips fired contact while the ball still sat there and fitted 400–550 frames of a stationary ball. 0.3 and 0.5 select the same contact frame on both, so this is a plateau rather than a tuned value.
 
