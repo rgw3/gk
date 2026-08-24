@@ -31,6 +31,14 @@ bias, so the instruments matter.
           because a cy0 error contributes cy0*Z/fx and Z is linear in time,
           so it can only add a linear term. Repeat this before anyone
           proposes camera tilt as an explanation again.
+
+  focal   Solves fx = d*Z/D from a stationary ball at a TAPE-MEASURED
+          distance. Punch list item 2.2. The 4K focal length is confirmed
+          exactly; the 1080p one reads 5.1% high and nobody knows whether
+          that is the lens or a paced distance being 5% out. Run it on both
+          calibration clips: the RATIO of the two answers is independent of
+          the ball's true size and of the tape, so it settles the question
+          even if neither absolute figure is perfect.
 """
 import argparse
 import csv
@@ -241,6 +249,121 @@ def run_tilt(args) -> None:
     print("apparent rise, so it still matters for launch angle.")
 
 
+def run_focal(args) -> None:
+    """Solve for focal length from a ball of known size at a measured range.
+
+    PUNCH LIST ITEM 2.2. What this settles and why it matters.
+
+    Every distance this project computes comes from fx, and fx comes from
+    AVCaptureDevice.Format.videoFieldOfView -- a nominal figure, not a
+    measured one. It can be recovered from footage instead, with no
+    reference to what the camera claims:
+
+        fx = d * Z / D
+
+    for a ball of true diameter D at range Z measuring d pixels across.
+
+    Measured on the 2026-08-22 clips, where the camera was PACED at 10
+    yards, the 4K figure came back at 2519 against a claimed 2520 -- exact,
+    and it settles the number most of the pipeline rests on. The 1080p
+    figure came back at 1324 against a claimed 1260: 5.1% high, and
+    unresolved. Two explanations fit and that data cannot separate them:
+
+      - the camera was not actually at 10 yards for that clip. fx 1260
+        would put it at 8.70 m, and a paced distance is easily 5% out.
+      - the 1080p/240 format really is narrower than the 74.6 degrees it
+        reports, in which case EVERY distance from a 1080p clip is 5%
+        short.
+
+    Only one clip can test it, so the sample size is one.
+
+    WHY THE CALIBRATION SHOT SETTLES IT AND THE OLD DATA CANNOT
+
+    The shot films one stationary ball, at a TAPE-MEASURED distance,
+    without moving the phone between formats. That removes both unknowns
+    at once:
+
+      - the distance is measured rather than paced, so the first
+        explanation is eliminated outright
+      - the same ball at the same distance is used for both formats, so
+        the RATIO of the two focal lengths is independent of both the
+        ball's true diameter and the distance. Even if the ball is not
+        206.1 mm and the tape is off, fx_4K / fx_1080p is still right.
+
+    That second point is why the ball is not measured: a Size 4 ball is
+    legal from 202.1 to 210.1 mm, which is +-1.9% on the absolute fx
+    values, but it cancels exactly from the comparison. If the ratio is
+    2.0 the two formats share a lens and the 1080p claim of 1260 is right;
+    if it is nearer 1.9 the 1080p format is genuinely narrower.
+
+    A resting ball is also the best measurement available anywhere in this
+    project: sharp, unblurred, at high confidence, and averaged over
+    hundreds of frames rather than estimated from a few.
+    """
+    track = read_track(Path(args.track))
+    if not track:
+        sys.exit(f"No detections in {args.track}. Run detect_ball.py first.")
+
+    frames = sorted(track)
+    if args.first is not None:
+        frames = [f for f in frames if f >= args.first]
+    if args.last is not None:
+        frames = [f for f in frames if f <= args.last]
+    if len(frames) < 10:
+        sys.exit(f"Only {len(frames)} usable frames; need at least 10.")
+
+    diameters = np.array([track[f]["diameter"] for f in frames])
+
+    # The ball is supposed to be stationary. If it is not -- someone
+    # nudged it, or the detector wandered onto something else -- the
+    # spread says so, and a calibration built on that would be wrong in a
+    # way nothing downstream could detect.
+    spread = float(diameters.std())
+    mean = float(diameters.mean())
+    relative = 100 * spread / mean
+
+    ball_m = args.ball_mm / 1000.0
+    fx = mean * args.distance / ball_m
+    fov = 2 * math.degrees(math.atan(args.width / (2 * fx)))
+
+    print()
+    print(f"FOCAL LENGTH from {Path(args.track).name}")
+    print(f"  {len(frames)} frames, ball at a measured {args.distance:.3f} m")
+    print()
+    print(f"  Diameter            {mean:.2f} px  "
+          f"(sd {spread:.2f}, {relative:.2f}%)")
+    print(f"  Implied fx          {fx:.1f} px")
+    print(f"  Implied field of view {fov:.2f} degrees")
+
+    if args.claimed:
+        error = 100 * (fx / args.claimed - 1)
+        print(f"  Claimed fx          {args.claimed:.1f} px  "
+              f"-- measured is {error:+.2f}% from it")
+
+    print()
+    if relative > 2.0:
+        print(f"  WARNING: diameter varies by {relative:.1f}% across these")
+        print("  frames. A ball at rest should be steady to a fraction of a")
+        print("  percent. Something moved, or the detector is not on the")
+        print("  ball. Do not calibrate from this.")
+    else:
+        print("  Diameter is steady, so the ball was genuinely at rest and")
+        print("  this average is worth trusting.")
+
+    print()
+    print("  Run this on BOTH calibration clips, then compare. The ratio of")
+    print("  the two focal lengths is independent of the ball's true size")
+    print("  and of the tape measure, because the same ball sat at the same")
+    print("  distance for both:")
+    print()
+    print("     ratio 2.00   the two formats share a lens, 1260 is right,")
+    print("                  and the 5.1% seen on the 2026-08-22 clip was a")
+    print("                  sloppy pace")
+    print("     ratio ~1.90  the 1080p/240 format is genuinely narrower, and")
+    print("                  every distance ever computed from a 1080p clip")
+    print("                  is about 5% short")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Check the pipeline against ground truth.",
@@ -268,6 +391,29 @@ def build_parser() -> argparse.ArgumentParser:
                       help="image centre row (default 1080, for 4K)")
     tilt.add_argument("--fps", type=float, default=119.95)
     tilt.set_defaults(func=run_tilt)
+
+    focal = sub.add_parser("focal",
+                           help="solve fx from a ball at a measured distance")
+    focal.add_argument("track", type=Path,
+                       help="track CSV from a CALIBRATION clip -- a "
+                            "stationary ball, not a kick")
+    focal.add_argument("--distance", type=float, required=True,
+                       help="TAPE-MEASURED metres from camera to ball. Not "
+                            "paced; pacing is what left the question open")
+    focal.add_argument("--ball-mm", type=float, default=BALL_M * 1000,
+                       help="ball diameter in mm (default 206.1, a Size 4). "
+                            "Affects the absolute fx but cancels from the "
+                            "ratio between the two formats")
+    focal.add_argument("--width", type=int, default=3840,
+                       help="frame width, used only to report field of view")
+    focal.add_argument("--claimed", type=float, default=None,
+                       help="the fx the camera implies, for comparison: "
+                            "2520 at 4K, 1260 at 1080p")
+    focal.add_argument("--first", type=int, default=None,
+                       help="ignore frames before this")
+    focal.add_argument("--last", type=int, default=None,
+                       help="ignore frames after this")
+    focal.set_defaults(func=run_focal)
 
     return parser
 

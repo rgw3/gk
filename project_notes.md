@@ -344,7 +344,7 @@ Measurement is being developed in Python on the Mac before anything is ported to
 | `tools/extract_frames.py` | `probe` (verify real frame timing against nominal), `sheet` (contact sheet to locate the kick), `extract` (frames as PNGs) |
 | `tools/detect_ball.py` | YOLO detection, background registration, continuity gating; writes the per-frame CSV |
 | `tools/compute_metrics.py` | Reads that CSV; 3D reconstruction, trajectory fit, landing detection, both flight models |
-| `tools/validate.py` | Checks the pipeline against ground truth: `carry` (observed displacement vs paced landing), `height` (camera height, independent of `fx`), `tilt` (principal-point sweep, kept as a negative result) |
+| `tools/validate.py` | Checks the pipeline against ground truth: `carry` (observed displacement vs paced landing), `height` (camera height, independent of `fx`), `tilt` (principal-point sweep, kept as a negative result), `focal` (solves `fx` from a stationary ball at a tape-measured distance — punch list 2.2, waiting on footage) |
 | `tools/synth_track.py` | Trajectories with a **known** answer. `generate` writes a synthetic track CSV that `compute_metrics.py` reads unmodified; `check` also runs the real physics over it and prints truth against recovered; `sweep` re-fits one track at a series of window lengths; `study noise\|geometry\|format\|distance` runs repeated seeded trials across a swept parameter and reports mean and spread. Injects off-square geometry, drag, centroid noise, diameter noise as a fraction **or in pixels**, and two diameter-bias models — recession-driven and blur-driven. **Use `--diameter-noise-px`, not `--diameter-noise`, for anything comparing formats or distances:** a fraction holds relative error constant by construction and measures nothing, which invalidated the first format study and a first attempt at the distance curve. Built 2026-08-24; see punch list item 2.1 for what it has found |
 | `tools/export_coreml.py` | Converts the detector to Core ML and checks the export against the weights. `sizes` reproduces the crop-vs-full-frame measurement; `dump` freezes the 640 crops to PNG as the fixed input for item 1.1; `blur` measures how the detector's box responds to motion blur in isolation; `scale` measures whether its bias grows as the ball shrinks. The last three were added 2026-08-24 and between them establish the detector's two hard limits — it loses the ball at ~29% of its width in smear, and below ~20 px of ball. **Runs under `.venv-export`, not `.venv`** |
 | `tools/sessions/*.csv` | Ground truth per filming session: which file is which kick, the paced landing, the paced camera distance, and whether the track reaches the ground |
@@ -454,7 +454,9 @@ The 4K agreement is exact and settles the number that most of the measurement de
 
 Only kick 1 can test this. Kick 6 acquires too late to have a resting phase and kick 7 does not track at all, so the 1080p sample size is one.
 
-**Settling it costs a tape measure.** Place the ball at a measured distance, film it at rest in both formats, and solve for `fx` in each. Ten minutes, no kicking required, and it removes an unknown that sits underneath every 1080p measurement the project will ever make. Add it to the next filming session.
+**Settling it costs a tape measure.** Place the ball at a measured distance, film it at rest in both formats, and solve for `fx` in each. Ten minutes, no kicking required, and it removes an unknown that sits underneath every 1080p measurement the project will ever make. It is item 2.2 of the punch list and the shot list opens with it.
+
+**The analysis is already built** — `validate.py focal`, 2026-08-24 — so the trip produces an answer rather than a pile of clips. **What decides it is the ratio of the two focal lengths**, which is independent of the ball's true diameter and of the tape measure because the same ball sits at the same distance for both: 2.00 means the formats share a lens and 1260 is right; ≈1.90 means the 1080p format is genuinely narrower and every 1080p distance is 5% short.
 
 Formats that look duplicated when listed by dimensions and frame rate alone are genuinely distinct — they differ in pixel format, binning, HDR support, or field of view.
 
@@ -981,7 +983,31 @@ A window starting just after contact sees blur *decreasing* and recession *incre
 
 **Section 2.1 is complete.** The physics is validated, three premises have been overturned, one defect found and handed to 3.5, and both detector questions — blur response and scale response — are measured.
 
-**2.2 Settle the 1080p focal length.** *(was Step 6)* Measure a distance to a stationary ball with a tape, film it at rest in both formats without moving the phone, and solve `fx = d · Z / D` for each. The 4K value is confirmed exactly; the 1080p value is 5.1% out and it is not known whether that is the lens or a sloppy pace — see *Camera capability*. It belongs here rather than later because no correction should be fitted on top of a possible 5% scale error. `shot-list.txt` now opens with this shot.
+**2.2 Settle the 1080p focal length.** *(was Step 6)* Measure a distance to a stationary ball with a tape, film it at rest in both formats without moving the phone, and solve `fx = d · Z / D` for each. The 4K value is confirmed exactly; the 1080p value is 5.1% out and it is not known whether that is the lens or a sloppy pace — see *Camera capability*. It belongs here rather than later because no correction should be fitted on top of a possible 5% scale error. `shot-list.txt` carries this shot.
+
+**The analysis side is built and waiting** — `validate.py focal`, added 2026-08-24. It reads a calibration clip's track, averages the resting diameter over every detected frame, and reports implied `fx`, implied field of view, and the disagreement with the claimed value. It refuses to be trusted quietly: if diameter varies by more than 2% across the frames it says the ball was not actually at rest rather than returning a confident wrong number.
+
+**The ratio is what settles it, and the ratio is robust.** The same ball sits at the same measured distance for both formats, so `fx_4K / fx_1080p` is **independent of the ball's true diameter and of the tape measure** — both cancel. A Size 4 ball is legal anywhere from 202.1 to 210.1 mm, which is ±1.9% on the absolute figures, and it drops out of the comparison entirely. So the ball does not need measuring:
+
+- **ratio 2.00** — the two formats share a lens, 1260 is right, and the 5.1% on the 2026-08-22 clip was a sloppy pace.
+- **ratio ≈ 1.90** — the 1080p/240 format is genuinely narrower, and **every distance ever computed from a 1080p clip is about 5% short.**
+
+**When the footage exists**, run `detect_ball.py` on each calibration clip with `--camera-distance` set to the measured value, then:
+
+```
+./tools/.venv/bin/python tools/validate.py focal TRACK --distance MEASURED --width 3840 --claimed 2520
+./tools/.venv/bin/python tools/validate.py focal TRACK --distance MEASURED --width 1920 --claimed 1260
+```
+
+**Three constraints on how the shot is taken, each of which can invalidate it:**
+
+- **Put the ball 5–10 m away.** Closer is more precise, but it must stay well inside the **1080p** detection floor of about 13 m, which is the tighter of the two formats — see 2.1 rung 13. Beyond that the calibration clip simply has no ball in it.
+- **Measure from the camera lens to the centre of the ball**, not from the operator's feet and not to the near edge. At 5 m, mistaking the near edge for the centre is a 2% error on `Z` and therefore 2% on `fx` — the same order as the discrepancy being chased.
+- **Neither the phone nor the ball may move between the two clips.** The whole method rests on one viewpoint and one ball position being shared, and a nudge to either destroys the ratio while leaving both clips looking perfectly good.
+
+**This is the only item in section 2 that cannot be done at the desk.** It needs a ball, a tape and a field.
+
+**All three are in `shot-list.txt`**, added 2026-08-24. Its calibration section now runs A to J with a kit list, and carries a *What ruins this shot* block — because every failure mode here produces footage that looks perfectly fine and is quietly useless. It also states that the ball does not need measuring and why, so nobody re-opens that question in a field.
 
 ### 3 — Fix the physics
 
@@ -1046,7 +1072,7 @@ The cause is that the session was filmed to measure kicks and then used to valid
 
 **Both belong in front of the coach at capture time, not in a post-hoc quality report.** See *The detector's blur response* and 2.1 rung 13.
 
-**Neither is in `shot-list.txt` either**, which the filming protocol section says should be kept in step with this document.
+**Both are now in `shot-list.txt`**, added 2026-08-24 as an opening section — the coach's only defence until the app checks them. It also resolves a conflict the two limits create: **item 14 asks the coach to stand further back so the landing is in shot, and the distance ceiling says not to.** The sheet now settles it by format — any clip that needs the landing in frame must be 4K/120, since 1080p runs out of reach at about 13 m and the ball vanishes mid-flight. Ordinary measurement clips are unaffected, because carry and apex come from the launch alone.
 
 **6.2 Build the results screen.** *(was Step 9)* Nothing in the app displays a metric. Whatever it shows must label carry and apex as theoretical, and should present the quality signals from 6.1 rather than a bare number as though it were certain.
 
@@ -1435,6 +1461,8 @@ Worth noting how that was possible: the 2026-08-21 footage no longer exists, but
 - **Clear other footballs out of shot.** The one the coach is measuring must be the nearest. This cost nine clips of eleven before the acquisition rule was fixed.
 - **Pace out where the ball first lands.** Done for all eleven kicks on 2026-08-22, which finally gives carry distance something to be checked against. Keep doing it every session; it costs nothing but counting.
 - **One kick deliberately off perpendicular**, as a control. Shot as kick 11 and it worked as intended — the off-square warning fired at 56.5°. Note the diagnostic did *not* degrade the gravity fit the way this document expected, which is what exposed the real cause.
+
+**Two hard operating limits were added to the sheet on 2026-08-24**, ahead of everything else on it, because unlike the rest of the protocol they decide whether there is a measurement at all rather than how good it is. **Bright, direct daylight is required** — past about a third of the ball's width in smear the detector stops finding it, a faster kick needs more light than a soft one, and a higher frame rate does not help. **And the ball cannot be allowed past about 26 m at 4K or 13 m at 1080p.** The sheet also now resolves the conflict between that ceiling and item 14: clips needing the landing in shot must be 4K/120.
 
 Keep `shot-list.txt` and this section in step as the protocol changes.
 

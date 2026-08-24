@@ -2,6 +2,57 @@ GOALKICK - SHOT LIST
 Read this in the field. Plain text so it opens anywhere.
 
 
+TWO THINGS THAT STOP IT WORKING ENTIRELY - read this first
+
+Everything else on this list makes the answer better or worse.
+These two decide whether there is an answer at all. Measured 24
+August. The software does not warn you about either one yet, so
+they are on you.
+
+
+LIGHT. Shoot in bright, direct daylight.
+
+A fast ball smears across the picture during the moment the shutter
+is open. Past about a third of the ball's width of smear, the
+software stops finding the ball completely. Not "less accurately" -
+it does not find it.
+
+  Bright sun          fine
+  Overcast            marginal, and worse the harder the kick
+  Evening, dusk       no
+  Under floodlights   no
+  Indoors             no
+
+Two things that will catch you out:
+
+- A HIGHER FRAME RATE DOES NOT FIX THIS. 240 does not rescue a
+  clip that 120 could not manage. In dim light both are far past
+  the point where the ball is lost.
+- HARD KICKS NEED MORE LIGHT THAN SOFT ONES. A gentle 13 m/s knock
+  survives conditions that a real 30 m/s goal kick will not. Do not
+  judge the light by how a warm-up clip looked.
+
+If the phone's picture looks at all dim or muddy on screen, stop.
+A clip shot in poor light is not a worse measurement, it is nothing
+at all, and you will not find out until you are back at the Mac.
+
+
+DISTANCE. There is a hard limit, and it depends on the format.
+
+The software loses the ball once it is smaller than about 20 pixels
+across. That puts a ceiling on how far away the ball can ever get:
+
+  4K / 120       about 26 m   (roughly 28-30 paces)
+  1080p / 240    about 13 m   (roughly 14 paces)
+
+1080p has HALF the reach of 4K. That is not a small difference and
+it is the single most useful thing on this page.
+
+Remember the ball keeps getting further away after it is kicked.
+Standing at 10 paces is fine; the ball flying out to 25 m is not,
+if you are shooting 1080p. See WHY THIS FIGHTS ITEM 14 below.
+
+
 BEFORE YOU START
 
 1. Open the app, set the BALL SIZE. Note which ball you used.
@@ -11,17 +62,55 @@ BEFORE YOU START
 
 FIRST, THE CALIBRATION SHOT - takes ten minutes, no kicking
 
-A. MEASURE, do not pace, a distance to the ball. A tape or a
-   measuring line. Write down the exact number.
-B. Film the ball sitting still for 10 seconds at 1080p / 240.
-C. Without moving the phone, switch to 4K / 120 and film it again
-   for 10 seconds.
-D. Write the measured distance next to both clip times.
+Bring a tape measure or measuring line that reaches 10 metres, the
+ball you normally film with, inflated the way you normally inflate
+it, something to rest the phone on, and something to write on.
+
+A. Put the ball on flat ground in bright daylight, with no other
+   footballs anywhere in the picture.
+B. Set the phone 5 to 10 METRES from the ball - closer is more
+   precise, and past about 13 m the software cannot see the ball at
+   1080p at all.
+C. Rest the phone on something solid - a wall, a bag, a fence post,
+   a tripod. It has to sit completely still for two minutes.
+D. Hold it level and in landscape, with the ball roughly centred.
+E. MEASURE, do not pace, from the PHONE'S LENS to the CENTRE of the
+   ball. Not from your feet. Not to the near edge.
+F. Pull the tape tight and straight, read it to the nearest
+   centimetre, and write it down in metres straight away.
+G. Set the ball size in the app.
+H. Film the ball sitting still for 10 seconds at 1080p / 240, with
+   nobody in the frame.
+I. Switch to 4K / 120 WITHOUT touching, nudging or repositioning
+   the phone, and film the same ball in the same spot for 10
+   seconds.
+J. Write down the measured distance, both clip times, and which
+   one is which format.
+
+WHAT RUINS THIS SHOT
+
+- Moving or bumping the phone between the two clips. The whole
+  method depends on both clips sharing one viewpoint.
+- Moving the ball between the two clips, for the same reason.
+- Pacing the distance instead of measuring it. That is exactly
+  what left this question open in the first place.
+- Measuring to the near edge of the ball instead of its centre.
+  At 5 m that is a 2% error, which is the same size as the thing
+  being investigated.
+- Anyone walking through the shot, or a second ball in frame.
+
+Every one of those produces footage that looks perfectly fine and
+is quietly useless, so get them right on the day.
 
 This settles the camera's focal length, which every distance the app
 computes is built on. The 4K value is confirmed. The 1080p value is
 5% out and nobody knows whether that is the lens or a sloppy pace -
 this shot answers it. Do it once and it never needs doing again.
+
+It works even if the ball is not exactly the size it should be, and
+even if the tape is slightly off, because both clips share one ball
+at one distance and what matters is the two answers COMPARED. That
+is why the ball itself does not need measuring.
 
 
 WHERE TO STAND
@@ -51,7 +140,9 @@ EACH KICK
 12. Hold the phone still. DO NOT PAN.
 13. Ball must fly free. No net, no wall, nothing stopping it.
 14. The ball must still be IN FRAME when it first hits the ground.
-    Stand further back if it is not. See WHY FOUR OF THESE MATTER.
+    Stand further back if it is not - but SHOOT THESE IN 4K / 120.
+    1080p runs out of reach at about 13 m and the ball vanishes
+    mid-flight. See WHY THIS FIGHTS ITEM 14.
 
 
 WHAT TO SHOOT
@@ -67,6 +158,9 @@ WHAT TO SHOOT
 
 DO NOT
 
+- Do not shoot in poor light. Nothing else on this list matters
+  if the ball cannot be found.
+- Do not shoot 1080p for a kick whose landing you need in frame.
 - Do not pan or follow the ball with the phone.
 - Do not stand behind or in front of the kicker.
 - Do not kick into a net.
@@ -100,6 +194,36 @@ matters more than accuracy.
 Item 18 is a control. The app should flag that clip as off-square
 and its gravity check should get worse in a predictable way. If it
 does not, the warning is broken and we need to know.
+
+
+WHY THIS FIGHTS ITEM 14
+
+Item 14 tells you to stand further back so the landing is in shot.
+The distance limit tells you not to go too far back or the ball
+disappears. Both are true and they pull against each other, so
+here is how to settle it in the field.
+
+  Shooting 4K / 120     you have room. The ceiling is about 26 m
+                        and a normal kick lands well inside it.
+                        Stand back as far as you need.
+
+  Shooting 1080p / 240  you do not have room. The ceiling is about
+                        13 m. A real goal kick will be past that
+                        while it is still in the air, and the track
+                        will just stop.
+
+So: ANY CLIP THAT NEEDS THE LANDING IN SHOT SHOULD BE 4K / 120.
+Shoot 1080p for kicks where you only care about how hard it was
+struck, which is most of them in normal use - the app works out
+carry and height from the launch alone and never needs to see the
+ball land.
+
+This also explains something from 22 August. Three of the eleven
+clips were 1080p, and those three were the troublesome ones: one
+failed outright, one came out suspect, and the only clean one was
+the shortest kick of the day, which never got far enough away to
+be lost. That may be coincidence with three clips. It matches the
+measured limit exactly.
 
 
 GETTING THE CLIPS OFF THE PHONE
