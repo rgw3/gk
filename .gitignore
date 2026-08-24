@@ -40,3 +40,4 @@ __pycache__/
 # Footage. Clips are large — 4K/120 runs roughly 6 MB per second — and the
 # originals live on the phone. Nothing here is a source of truth.
 *.mov
+tools/.venv-export/

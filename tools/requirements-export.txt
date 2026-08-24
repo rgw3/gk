@@ -1,0 +1,25 @@
+# Core ML export only. NOT the analysis environment -- see requirements.txt.
+#
+# Build with the system Python 3.9, which is what these versions support:
+#
+#   /usr/bin/python3 -m venv tools/.venv-export
+#   ./tools/.venv-export/bin/python -m pip install -r tools/requirements-export.txt
+#
+# Why this is separate from tools/.venv. coremltools converts from
+# TorchScript and is pinned to torch versions it has been tested against.
+# The analysis venv runs Python 3.14 and torch 2.13 because that is what
+# makes detection fast on this Mac. coremltools 9.0 has tested up to torch
+# 2.7 and fails on 2.13 with a cascade of frontend errors -- each patch
+# reveals the next, and hand-patching a model converter is a bad trade when
+# the whole point is measuring bounding boxes to a few percent.
+#
+# So the two environments do different jobs and are allowed to disagree.
+# This one runs once per model version and does not care about speed.
+#
+# Versions are pinned rather than floated. The export has to be
+# reproducible: a model that ships should be traceable to the exact
+# toolchain that produced it.
+
+torch==2.7.1
+coremltools==9.0
+ultralytics==8.4.126
