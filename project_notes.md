@@ -23,6 +23,11 @@ It records **current state only**. Decisions that were later reversed are remove
 - When asked to write any code (e.g. markdown, swift, html, python, java, etc.) write whatever fully in that language. Do not write part of it and expect the user to convert any part.
 - Do not offer additional steps without being asked.
 - Never execute code. I will always execute code myself.
+- **Keep this document current as we go.** Whenever anything is accomplished — a decision made or reversed, code written, a measurement taken, a punch list item finished, an assumption disproven — update `project_notes.md` at that point, not at the end of the session. Record what changed and why, and remove what it superseded rather than leaving both. The reason is cost: batched updates are where the file and the work drift apart, and reconciling them afterwards takes longer than writing them down at the time and is less accurate, because the reasoning has been forgotten by then. See the permission carve-out under *Code Delivery Rule*, which is what makes this possible without asking every time.
+  - **Updating the section you are writing in is not enough.** This file states the same fact in several places on purpose — a finding, the status table that summarises it, the file table that lists the code, the risk it retires, the next step that assumed it. A result recorded in one place and left stale in five is worse than not recording it, because the file now contradicts itself and the reader cannot tell which entry is current.
+  - **So every time something is recorded, search the file for what else asserted it** — the claim, the file or command it names, the assumption it rests on — and bring those into line in the same pass. Do this as part of the update, not as a review afterwards and never at the end of a session. Half an hour of work has already been enough for a fact written here to go stale elsewhere in this same file.
+  - **The most dangerous staleness is a discharged caveat.** A warning that some result is unproven, left in place after it has been proven, does not merely misinform — it suppresses work that is now safe to do. Hunt those specifically.
+- **`README.md` is frozen. Do not edit it.** Until I say otherwise, make no changes to `README.md` for any reason — not corrections, not new findings, not bringing it into line with this file. It will get one clean rewrite once the project is finished. Piecemeal updates are what caused the trouble: the two documents drift, they disagree in ways that are not obvious, and a reader cannot tell which one is behind. `project_notes.md` is authoritative in the meantime. Where the README is known to be wrong or behind, add it to *Where README.md disagrees with this file* — that catalogue is what the eventual rewrite will be built from, so it should keep growing while the README itself stays untouched.
 
 ### My Experience Level — calibrate your instructions to this
 
@@ -43,7 +48,11 @@ The rule differs by file type.
 
 **Swift source files inside the Xcode project: edit them directly.** You do not need to ask each time. Write the change, then explain in chat what you changed and why. This applies to `.swift` files under `GoalKick/`. Rationale: source files grow long, and most changes touch a few lines in the middle of an existing file. Reprinting whole files into chat for me to re-paste is slow and is where copy-paste errors come from. Git history and undo are the backstop.
 
-**`project_notes.md`: never edit without my explicit permission, given in chat, for that specific edit.**
+**`project_notes.md`: never edit without my explicit permission, given in chat, for that specific edit — with one standing exception, below.**
+
+**The standing exception: recording what has actually happened.** Granted 2026-08-24, to make *Keep this document current as we go* workable without a confirmation after every action. You may update this file **without asking** when you are recording a thing that has already occurred — a decision I made, code that was written, a measurement that was taken, a punch list item finished, an assumption disproven. Say in chat what you recorded and where.
+
+**The exception is narrow and everything else still needs permission.** Rewriting reasoning, changing scope, restructuring a section, reordering the punch list, removing a decision, or adding a new position I have not taken are **not** covered, whatever prompted them. The test is whether you are transcribing something settled or authoring something new: transcription is covered, authorship is not. When in doubt, it is not covered — ask.
 
 - **Explicit permission means I say so directly** — for example, "update Current State," "add that to the file." Nothing else counts.
 - **Asking for permission is not receiving it.** Do not ask and then proceed. Do not treat silence, a follow-up question, or a general approval of an approach as consent.
@@ -130,7 +139,11 @@ The crop matches full-frame 3840 accuracy while the model sees only 640 px — *
 
 **The export changes nothing, which was not a foregone conclusion.** The same frames through `yolo11n.pt` and `yolo11n.mlpackage` give **0.00% difference** in box diameter and identical confidences to two decimals. That means the diameter bias under *The gravity discrepancy* is a property of the architecture rather than the runtime, and characterising it on the Mac is not wasted. The distance gate's 1.3 factor and the 1.6 diameter tolerance likewise carry over.
 
-**The Neural Engine is still untested, and it is the thing that ships.** Ultralytics runs Core ML on the Mac's CPU or GPU. The ANE may use float16, which could move box coordinates. The comparison in `tools/export_coreml.py compare` has to be repeated on a device before any of the above is settled.
+**The Neural Engine is unreachable by this export, and the GPU is what ships.** This section previously read "the Neural Engine is still untested, and it is the thing that ships." Measured on device 2026-08-24 by Xcode's Core ML performance report, that is false: the model's `storagePrecision` is Float32, the ANE requires float16, and **not one of the 242 compute operations lists the Neural Engine as a supported device.** Every one prefers the GPU. See punch list item 1.1 for the measurement.
+
+What was actually at risk — that a different runtime would move the box coordinates — is settled for every device Core ML can use here: coordinates are identical across CPU, GPU and `.all`, and the device reproduces the Mac's diameters to two decimals. Whether float16 would move them is now a question about a *different export* that does not yet exist.
+
+**Throughput turned out not to be a risk either.** Steady state is **5.68 ms per 640×640 inference on the GPU** of an iPhone 17 Pro. Every frame of a 787-frame 4K/120 clip would take 4.5 s. The crop architecture remains right, but for diameter precision — never for speed.
 
 **Registration is unverified.** The Mac uses Shi-Tomasi features, Lucas-Kanade optical flow and a RANSAC affine estimate. `VNTranslationalImageRegistrationRequest` is a *different algorithm*, not a reimplementation. Drift of 250–390 px is currently being corrected on real clips, so this matters; equivalent in intent, unproven in effect.
 
@@ -151,6 +164,18 @@ Deliverable 1 asks for velocity, launch angle, and *theoretical* carry distance 
 This resolves what would otherwise be an impossible framing problem. Covering a 40 m flight requires standing ~27 m back, where a Size 4 ball is under 10 px wide at 1080p (see *Pixels on the ball*). Filming only the launch allows standing 5–12 m away, where the ball is 26–52 px and the diameter estimate is sound.
 
 It also means footage that ends early — a ball struck into a close net — still yields all four metrics.
+
+**Truncated flight is the normal case, not the exception, and the pipeline must be built for it.**
+
+In ordinary use the ball will **usually** either leave the frame or be struck into a net. That is not a filming failure to be designed out — it is the direct consequence of the guardrails below. Standing 5–12 m away is what puts enough pixels on the ball to measure it, and at that distance a real goal kick is out of the frame within a fraction of a second. Telling the coach to stand back far enough to keep the whole flight in shot would destroy the diameter precision that every distance depends on. **The two cannot both be had, and this project has chosen pixels on the ball.**
+
+Three consequences, all binding:
+
+- **Every metric must be derived from the launch window alone** — roughly the first 0.15 s after contact. No stage of the pipeline may require the apex, the descent, or the landing to be present. Anything that needs them is validation tooling, not measurement.
+- **The clip will typically be longer than the usable window, and the usable window is a short slice near the start.** The fit is cut at the *earliest* of: the detected landing, the ball leaving the frame, the ball reaching the net, or the end of the track. A window that runs past any of those contains something that is not free flight, and the failure mode is the one recorded under *The gravity discrepancy* — the fit collapses toward a straight line and reports gravity near zero, while looking perfectly healthy.
+- **A net is a harder end than a bounce, and it is not currently detected.** `find_landing()` looks for the reversal in vertical image position after the apex. A ball struck into a close net never reaches an apex and never reverses; it decelerates violently against the netting and drops. That is not free flight, and nothing in `compute_metrics.py` currently identifies it. On net footage the fit window has to be ended by other means — `--last-frame`, or a check yet to be written. The 2026-08-21 session was filmed into a net, so this is not hypothetical.
+
+**No metric should ever be reported as unavailable because the flight left the frame.** If that happens the pipeline has a bug, not the footage.
 
 **Filming guardrails.** These are constraints on the coach, not on the software, and they are what make the measurement tractable:
 
@@ -175,7 +200,7 @@ None of the filming guardrails is built. The app offers no framing guidance and 
 
 **On-device constraints.** Analysis runs on an iPhone or iPad, after capture rather than live, so throughput is not critical — but two things are:
 
-- **The detector must export to Core ML and fit on the Neural Engine.** The Mac-side spike is restricted to `yolo11n` (~6 MB) and `yolo11s` (~19 MB) for that reason. Proving the concept with a model that cannot ship would prove nothing.
+- **The detector must export to Core ML and run on the device.** The Mac-side spike is restricted to `yolo11n` (~6 MB) and `yolo11s` (~19 MB) for that reason. Proving the concept with a model that cannot ship would prove nothing. **This originally said "fit on the Neural Engine."** Measured 2026-08-24, the Float32 export cannot reach the ANE at all and runs on the GPU at 5.68 ms per 640 px inference, so ANE fit is not the binding constraint — but small models remain right for app size and for the option of a float16 re-export later.
 - **Camera-shake compensation ports cleanly.** Frame-to-frame registration against the background has native equivalents in `VNTranslationalImageRegistrationRequest` and `VNHomographicImageRegistrationRequest`, so this technique survives the move to the app with no third-party dependency. It complements the decision to disable hardware video stabilisation at capture: the camera's own stabiliser applies a *non-rigid* warp that corrupts geometry, while a *rigid* registration applied in analysis removes shake without distorting. Off in the camera, corrected in software.
 - **Diameter refinement was dropped rather than ported.** An earlier spike refined ball diameter with OpenCV's `HoughCircles`, which has no Apple equivalent. Measured against real footage it inflated diameter by ~45% while the raw detector box held steady to a few pixels, so it was removed. Nothing in the current pipeline depends on an OpenCV routine without a Vision or Accelerate counterpart.
 
@@ -183,9 +208,11 @@ None of the filming guardrails is built. The app offers no framing guidance and 
 
 ### What does NOT exist yet
 
-**There is no measurement code in the app.** Detection, tracking and metrics exist only as Python on the Mac (see *Analysis pipeline*). The iOS app still captures, stores and reviews; it computes nothing, and no Swift has been written for any of it.
+**There is no measurement pipeline in the app.** Detection, tracking and metrics exist only as Python on the Mac (see *Analysis pipeline*). The iOS app captures, stores and reviews; it measures nothing.
 
-**A Core ML model does exist** — `yolo11n.mlpackage` at the repo root, exported 2026-08-24 and verified to reproduce the PyTorch boxes exactly. It has never been loaded by the app, and it has never run on the Neural Engine.
+**The first Swift that runs the detector does now exist, as a temporary harness.** `ANEComparison.swift`, written 2026-08-24 for punch list item 1.1, loads the Core ML model, runs it on four bundled crops and decodes its raw output into a ball diameter. It is a measurement *instrument*, not a stage of the pipeline: it does not track, does not read a clip, and computes no metric. Its decoding is nonetheless the working core of what 4.1 needs, and it has been verified against the Mac to two decimals.
+
+**The model is in the app and has run on the device.** `yolo11n.mlpackage` moved into `GoalKick/` on 2026-08-24 and is now the only copy — the duplicate at the repo root was deleted, and `tools/export_coreml.py` points here — with Xcode compiling it into the bundle automatically through the synchronized folder. It has been loaded and run on an iPhone 17 Pro. **It has never run on the Neural Engine and cannot**: the export is Float32 and the ANE requires float16, so every operation falls to the GPU. See punch list item 1.1.
 
 **The metrics are half-validated.** The reconstruction is confirmed: on every clip whose track reaches the ground, observed displacement matches a paced landing to within 3–10%. The flight fit is not: gravity averages 7.7 across nine clips against 9.81, or 8.3 across the seven the tool does not flag as suspect, from a known cause — a progressive bias in the detector's flight diameters, detailed under *The gravity discrepancy*. **No figure should be shown to a coach yet**, but the open question is now a specific measurable defect rather than a mystery.
 
@@ -216,7 +243,8 @@ Each of these is verified on hardware, not merely written. Details are in the se
 | **Ground truth** | Eleven kicks filmed 2026-08-22 with paced landing distances, camera at 10 yards, cones at a measured 5 yards. The first data in the project's history against which a computed carry can be checked at all. |
 | **Reconstruction validated** | On every clip whose track reaches the ground, observed displacement matches the paced landing to within **3–10%**. Focal length from field of view, ball diameter as scale, per-frame depth and 3D geometry confirmed against a distance measured on the pitch rather than against themselves. |
 | **Portability audited** | 2026-08-24. The maths ports to Accelerate with no OpenCV dependency. Recorded under *Porting risks*. |
-| **Core ML export** | `yolo11n.mlpackage` at the repo root, reproducing the PyTorch boxes to 0.00%. Built with a pinned Python 3.9 environment. **Never run on the Neural Engine**, which is the runtime that ships. |
+| **Core ML export** | `GoalKick/yolo11n.mlpackage`, reproducing the PyTorch boxes to 0.00%. Built with a pinned Python 3.9 environment. |
+| **Runtime verified on device** | 2026-08-24, iPhone 17 Pro. The device reproduces the Mac's diameters to two decimals on all four frozen crops, and box coordinates are identical across every compute unit. The export is Float32 and therefore **cannot reach the Neural Engine at all** — the GPU is what runs, at 5.68 ms per 640 px inference. See punch list item 1.1. |
 | **Crop architecture proven** | A 640 px crop at native resolution matches full-frame 3840 accuracy at 1/36th the compute. This resolves the largest porting risk and is what gets ported. |
 
 ### Where README.md disagrees with this file
@@ -232,7 +260,7 @@ Audited 2026-08-24. `README.md` is a public-facing overview and **this file is a
 | Nothing about the input-size floor | Full-frame 1280 silently loses the ball mid-flight and reads 33% high late — the trap most likely to catch an implementer |
 | No status row for the crop architecture | The most consequential finding of 2026-08-24, and what determines the on-device design |
 
-**None of this makes the README wrong**, only incomplete and more confident than the evidence in places. Bring it into line whenever it is next touched; until then, treat any figure it gives as needing confirmation here.
+**None of this makes the README wrong**, only incomplete and more confident than the evidence in places. **Do not bring it into line** — `README.md` is frozen until the project is finished, per *LLM Start Here*, and this catalogue is what its eventual rewrite will be built from. Keep adding to the table as further gaps appear; until the rewrite, treat any figure the README gives as needing confirmation here.
 
 ### What rests on evidence the repository no longer holds
 
@@ -259,7 +287,7 @@ Neither is worth re-testing now. Both are worth knowing are single points of evi
 
 - **Mac:** macOS 26, Xcode 26 from the Mac App Store, iOS 26 platform installed, command line tools pointed at Xcode.
 - **Test devices:** two, with different jobs.
-  - **"Rocket's iPhone"** — the **capture** device. Paired over cable, Developer Mode enabled, developer certificate trusted.
+  - **"Rocket's iPhone"** — an **iPhone 17 Pro**, 256 GB, iOS 26.6.1, identified from the Core ML performance report of 2026-08-24. The **capture** device. Paired over cable, Developer Mode enabled, developer certificate trusted.
   - **iPad Air 11" (Wi-Fi only)** — the **review** device, verified working. Capture is not attempted on it; see the Review section.
 - **Signing:** free Apple ID under a Personal Team (Robert Williams), automatic signing. Not enrolled in the paid Apple Developer Program.
 
@@ -279,7 +307,10 @@ Build, sign, install, and launch are confirmed working on both devices. Getting 
 
 | File | Contents |
 |---|---|
-| `ContentView.swift` | Tab bar container — **Record** and **Review** — and the `onOpenURL` landing point for clips sent to the app from outside it |
+| `ContentView.swift` | Tab bar container — **Record**, **Review**, and a temporary **ANE** tab — and the `onOpenURL` landing point for clips sent to the app from outside it |
+| `ANEComparison.swift` | **Temporary**, punch list item 1.1. Loads `yolo11n.mlmodelc` under each `MLComputeUnits` setting, decodes the raw `var_1223` tensor into ball diameters, reports both selection rules, and writes the result to `Documents/ane-results.txt`. Deletes cleanly with the ANE tab; its decoding is what 4.1 should lift. |
+| `yolo11n.mlpackage` | The detector, and **the only copy** — moved here 2026-08-24. The synchronized folder puts it in the app bundle and Xcode compiles it to `yolo11n.mlmodelc` at build time, so **the app will not build without it**. The former copy at the repo root was deleted rather than kept: it was ~10 MB of duplicate binary in git and two files free to drift apart at the next re-export. `tools/export_coreml.py` now defaults `--coreml` here. Note that `export` writes its output beside the `.pt` weights, so a fresh export lands at the root and must be moved in. |
+| `crop-f00*.pngraw` | **Temporary**, four frozen 640×640 crops from kick 11 — the fixed input for 1.1. The `.pngraw` extension is deliberate: Xcode's `COMPRESS_PNG_FILES` rewrites bundled `.png` into Apple's CgBI variant, which would mean the device no longer reads the bytes the Mac baseline was measured from. |
 | `RecordView.swift` | Capture screen: live preview, configuration picker, ball size picker, record button |
 | `Recorder.swift` | `CaptureConfig`, `BallSize`, `ClipMetadata`, `ClipStore`, capture session, format selection, orientation, recording, file verification |
 | `ReviewView.swift` | `ReviewPlayer` (transport, scrubbing, looping, frame stepping), `DrawingCanvasView`, `ZoomingScrollView`, `ZoomableVideoView`, clip browser, review screen |
@@ -301,7 +332,7 @@ Measurement is being developed in Python on the Mac before anything is ported to
 | `tools/detect_ball.py` | YOLO detection, background registration, continuity gating; writes the per-frame CSV |
 | `tools/compute_metrics.py` | Reads that CSV; 3D reconstruction, trajectory fit, landing detection, both flight models |
 | `tools/validate.py` | Checks the pipeline against ground truth: `carry` (observed displacement vs paced landing), `height` (camera height, independent of `fx`), `tilt` (principal-point sweep, kept as a negative result) |
-| `tools/export_coreml.py` | Converts the detector to Core ML, checks the export against the weights, and reproduces the crop-vs-full-frame measurement. **Runs under `.venv-export`, not `.venv`** |
+| `tools/export_coreml.py` | Converts the detector to Core ML, checks the export against the weights, reproduces the crop-vs-full-frame measurement, and — `dump`, added 2026-08-24 — freezes the 640 crops to PNG as the fixed input for the on-device comparison in punch list item 1.1. **Runs under `.venv-export`, not `.venv`** |
 | `tools/sessions/*.csv` | Ground truth per filming session: which file is which kick, the paced landing, the paced camera distance, and whether the track reaches the ground |
 | `tools/requirements.txt` | `opencv-python`, `numpy`, `ultralytics` — the analysis environment |
 | `tools/requirements-export.txt` | Pinned `torch`, `coremltools`, `ultralytics` — the export environment |
@@ -367,7 +398,7 @@ No rule has been derived for this, deliberately: one clip is not enough to inven
 
 The split is not tidiness. coremltools converts from TorchScript and is pinned to torch versions it has tested; on torch 2.13 it fails with a cascade of frontend errors, each patch revealing the next. **Hand-patching a model converter is a bad trade when the whole point is measuring bounding boxes to a few percent** — it can export cleanly and compute something subtly different. Under the pinned environment the export succeeded first time with no patches. Forcing one environment to do both jobs is what created the problem; separating them means the fast path never has to be downgraded to keep the export working.
 
-**Nothing here ships.** It is a spike whose findings port to Vision, Core ML and Accelerate. Two constraints keep it portable: the detector is restricted to `yolo11n` and `yolo11s` so it will fit on the Neural Engine, and no technique is used that lacks an Apple equivalent — which is why an OpenCV `HoughCircles` diameter refinement was removed rather than kept.
+**Nothing here ships.** It is a spike whose findings port to Vision, Core ML and Accelerate. Two constraints keep it portable: the detector is restricted to `yolo11n` and `yolo11s` so it stays small enough to run comfortably on a phone — originally stated as fitting on the Neural Engine, which measurement has since shown is not where it runs — and no technique is used that lacks an Apple equivalent — which is why an OpenCV `HoughCircles` diameter refinement was removed rather than kept.
 
 **Clips reach the Mac over the cable, not AirDrop.** Finder → the iPhone under *Locations* → the **Files** tab → *GoalKick → Clips* → drag out. This is byte-for-byte and needs no device discovery; AirDrop failed to find the Mac in practice.
 
@@ -529,22 +560,13 @@ Completed work is recorded under *Current State → What is done*. This section 
 
 Steps 3 and 4 are written and running on the Mac. What follows is what remains.
 
-**Step 5 — Establish measurement accuracy.** Mostly done, and what remains has been deliberately deferred behind Step 7. Ten of eleven 2026-08-22 clips track the right ball and nine produce sound metrics, against two and zero before 2026-08-24.
+**This section is a punch list, in execution order.** Reordered 2026-08-24 to finish the measurement component. The old Step 5–9 labels are kept in parentheses because other sections of this document refer to them by number, but **the order below is the order of work**, not the order of the labels. Work top to bottom.
 
-**What was achieved.** On every clip whose track reaches the ground, observed displacement matches the paced landing to within 3–10%. That is the first end-to-end validation this project has had: focal length from field of view, ball diameter as scale, per-frame depth and 3D geometry, all confirmed against a distance measured on the pitch rather than against themselves.
+The ordering principle is: prove that the Mac's findings survive the move to the device before building on them, get a known answer to debug against before diagnosing anything, fix the physics before porting it, and put the numbers in front of a coach last.
 
-**What remains.** Fitted gravity still averages 7.7 across nine clips, or 8.3 across the seven not flagged suspect, rather than 9.81, and the cause is a progressive bias in the detector's flight diameters — see *The gravity discrepancy*. Correcting that bias is the outstanding work.
+### Before starting anything
 
-**Step 7 was moved ahead of this, on a premise the export has since disproven.** The worry was that the bias belongs to the PyTorch model's boxes and that Core ML export would change them, so measuring it first would mean measuring it twice. Measured 2026-08-24, the export reproduces the boxes to **0.00%** — so the bias would have transferred and the reordering was not necessary for that reason.
-
-It was worth doing anyway, and by some distance. Exporting first is what surfaced the crop architecture, which resolved the largest porting risk on the books and revealed that full-frame 1280 — the obvious on-device compromise — silently loses the ball mid-flight. Neither would have been found by finishing the accuracy work first. **The decision was right; the stated reason was wrong.**
-
-Two things worth doing whenever this resumes:
-
-1. **A synthetic validation harness.** Every debugging session so far has lacked a known answer. Generating a ballistic trajectory with chosen parameters, projecting it through the pinhole model, and feeding it to `compute_metrics.py` would establish whether the maths is right independently of any footage — and would turn the noise tolerance and the ±15° guardrail from arguments into measured curves. It would also compare 1080p against 4K on the *same* kick, which no single-phone filming session can do. It would have caught the landing-window bug in an afternoon.
-2. **Two clips still fail and are not understood.** Kick 7 acquires for a single frame and collapses; kick 10 detects correctly but its track only starts near the end of the clip. Neither is diagnosed.
-
-**Before anything else, check the prerequisites.** The eleven clips must be at `~/Desktop/clips/`, and both virtual environments must exist — `tools/.venv` from `tools/requirements.txt`, and `tools/.venv-export` from `tools/requirements-export.txt`. Both are gitignored and neither survives a fresh clone. Each requirements file carries its own build instructions.
+**Check the prerequisites.** The eleven clips must be at `~/Desktop/clips/`, and both virtual environments must exist — `tools/.venv` from `tools/requirements.txt`, and `tools/.venv-export` from `tools/requirements-export.txt`. Both are gitignored and neither survives a fresh clone. Each requirements file carries its own build instructions.
 
 **Then validate against ground truth**, which is the fastest way to see whether anything has regressed:
 
@@ -565,24 +587,116 @@ for c in tools/frames/*-track.csv; do case "$c" in *1080p240*) W=1920; H=1080;; 
 
 **Check implied range before believing any metric.** If a clip reports the ball 20–31 m away when the camera stood at 9.1 m, it has locked onto someone else's football — see *Analysis pipeline*.
 
+### 1 — Settle whether the Mac's findings transfer at all — **DONE 2026-08-24**
+
+**Outcome: the Mac's findings transfer intact, and the Neural Engine is not part of the picture.** The device reproduces the Mac's diameters to two decimals on all four frozen crops; box coordinates are identical across every compute unit Core ML can use; the export is Float32 and therefore cannot reach the ANE at all. Section 3 may rely on Mac-side measurements without qualification.
+
+**Decision, 2026-08-24: stay on the Float32 export and let it run on the GPU.** A float16 re-export is what the Neural Engine would require, and it was considered and declined. The GPU runs a 640 px inference in 5.68 ms — a whole 4K clip in 4.5 s, against a measurement window of a fraction of a second — so the ANE's advantage here is power efficiency on a job lasting seconds, which is not worth buying. Against that, float16 would perturb exactly the box numerics that 3.1 exists to characterise, and would cost a second export and a second validation to get back to where the pipeline already is. **Revisit only if sustained inference ever becomes the workload** — continuous live detection rather than post-capture analysis of a short window would change the arithmetic.
+
+**One requirement came out of this and belongs to 4.1: the port needs NMS.** Recorded in full below.
+
+**1.1 Run the exported model on the device and repeat the box comparison.** *(was Step 7.1)* **Done.** As posed, this item read "run it on the Neural Engine" and assumed the ANE was what ships. That assumption was wrong — see the measurement below — so what the item actually settled is the broader question underneath it: whether the device runtime reproduces the Mac's boxes. It does, exactly.
+
+It was placed first because it is cheap and because every item below inherits its answer: if the boxes moved, the diameter-bias work in section 3 would be characterised against numerics the device does not use.
+
+**Method.** The comparison is *not* Swift-against-Python. Swift and Python differ in how they decode video, resize and convert colour, so a discrepancy between them would be ambiguous between the runtime and the plumbing. Instead: identical PNG inputs, one piece of Swift, run three times changing only `MLComputeUnits`. Core ML offers no way to force the Neural Engine, but `.cpuOnly` provably excludes it, so the difference between `.cpuOnly` and `.all` **is** the ANE effect with nothing else varying. The Python figures below are a third data point rather than the yardstick. `MLModel` is driven directly rather than through `VNCoreMLRequest`, because Vision applies its own scaling and cropping and that is a variable which does not belong inside a numerical comparison — Vision arrives at 4.1, where it is the thing being tested.
+
+**The model has no NMS.** It was exported with `nms=False` — deliberately, because `detect_ball.py` does its own candidate selection and baked-in NMS would discard the candidates that choice depends on. Its single output `var_1223` is therefore a raw tensor, not decoded detections. Ultralytics does that decoding on the Mac; in Swift it has to be written by hand — read the tensor, take COCO class 32, convert centre/width/height to a diameter, pick the largest. Input is fixed at 640×640, which is already the crop size that ships.
+
+**Done 2026-08-24 — the Mac baseline is frozen.** `export_coreml.py dump` wrote the four kick 11 crops to `tools/frames/ane-inputs/` and measured both models by reading those files back:
+
+| crop | true diameter | PyTorch | Core ML (Mac CPU/GPU) |
+|---|---|---|---|
+| f620 | 57.2 px | 58.28 px, c0.96 | 58.28 px, c0.96 |
+| f660 | 52.4 px | 54.12 px, c0.94 | 54.12 px, c0.94 |
+| f700 | 37.7 px | 37.63 px, c0.94 | 37.63 px, c0.94 |
+| f740 | 30.4 px | 30.35 px, c0.35 | 30.35 px, c0.35 |
+
+Three things this establishes. The two runtimes remain identical to two decimals when driven from files rather than arrays. The errors against truth — **+1.9%, +3.3%, −0.2%, −0.2%** — reproduce the `crop 640 @native` column under *Porting risks* exactly, so the PNG round trip is lossless and these files are a sound fixed reference. And the late-flight frame carries only **0.35 confidence against the detector's 0.25 default**, against 0.94–0.96 everywhere else.
+
+**That 0.10 of headroom was the thing to watch, and it held.** The concern was that if the runtime shifted confidences at all, f740 was where it would surface as the ball *disappearing* rather than as a small numeric difference — and a frame lost late in flight is precisely where the diameter bias of 3.1 lives. Measured on device, f740's best confidence is **0.3540** against the Mac's 0.35: the headroom is intact and the frame is in no danger. The 0.2515 that the first device run reported was a decoder artifact, not a runtime effect — see below.
+
+**Measured on device 2026-08-24 — iPhone, iOS 26.6.1.** `ANEComparison.swift`, a temporary harness on an "ANE" tab, ran the four bundled crops through `yolo11n.mlmodelc` four times, changing only `MLComputeUnits`:
+
+| crop | cpuOnly | cpuAndGPU | cpuAndANE | all | spread |
+|---|---|---|---|---|---|
+| f620 | 58.64 px c0.8380 | identical | identical | identical | 0.00% |
+| f660 | 54.37 px c0.9029 | identical | identical | identical | 0.00% |
+| f700 | 38.14 px c0.8488 | identical | identical | identical | 0.00% |
+| f740 | 30.52 px c0.2515 | identical | identical | identical | 0.00% |
+
+Every configuration returned `var_1223 [1, 84, 8400] float32`.
+
+**The device runtime reproduces the Mac exactly.** Re-run with both selection rules reported side by side, the highest-confidence box matched the Mac baseline on every crop:
+
+| crop | Mac | device, most confident |
+|---|---|---|
+| f620 | 58.28 px c0.96 | 58.28 px c0.9587 |
+| f660 | 54.12 px c0.94 | 54.12 px c0.9376 |
+| f700 | 37.63 px c0.94 | 37.63 px c0.9437 |
+| f740 | 30.35 px c0.35 | 30.35 px c0.3540 |
+
+**The earlier device-versus-Mac gap was the decoder, not the runtime**, and it is now understood. The first run took the *largest* box above threshold from the raw tensor, which read diameters 0.46–1.36% high and confidences 0.04–0.12 low. Ultralytics applies NMS on the Mac and then picks the largest of one-box-per-object; the harness was picking the largest *duplicate anchor*. Same rule, different input.
+
+**This converts into a requirement on 4.1.** Largest-candidate acquisition is correct and is not in question — it is what stops the detector locking onto a football 25 m away, which cost nine clips of eleven. But it was validated against suppressed boxes, so **the port needs NMS, or an equivalent, before that rule is applied on device.** Applying it to raw anchors is a different rule that happens to look similar, and it biases diameter upward by up to 1.4% — small, but in a pipeline where diameter precision is the weakest link and a 6–9% bias is the outstanding defect of 3.1, a systematic 1.4% is not noise to be absorbed silently.
+
+**The Neural Engine never ran, and cannot.** Measured by Xcode's Core ML performance report on 2026-08-24, run with compute units set to **All** so Core ML was free to choose:
+
+| | |
+|---|---|
+| Program operations | 958, of which **242** are real compute ops |
+| Supported devices, every one of the 242 | **`{cpu, gpu}`** |
+| Preferred device, every one of the 242 | **`gpu`** |
+| Operations listing `neuralEngine` as supported | **zero** |
+
+**The cause is `storagePrecision: Float32` in the model's own metadata.** The ANE requires float16 weights; the export was produced without `half=True`, so the network is CPU/GPU-only by construction. Nothing about the architecture or the operations is at fault, and no amount of asking for `.cpuAndNeuralEngine` can change it.
+
+This also explains the one number that varied across the sixteen harness runs — f740's class score, `0.3540` under `.cpuOnly` and `.cpuAndANE`, `0.3541` under `.cpuAndGPU` and `.all`, with box coordinates unaffected throughout. `.cpuAndANE` agreed with `.cpuOnly` bit for bit because it *was* CPU-only; there was nothing for the ANE to take. The GPU's one-part-in-3,540 divergence from the CPU is ordinary floating-point behaviour and far below anything that matters here.
+
+**Performance, measured on the same run — iPhone 17 Pro, iOS 26.6.1:**
+
+| stage | first call | median thereafter |
+|---|---|---|
+| compile | 63.1 ms | 55.7 ms |
+| load | 117.8 ms | 20.2 ms |
+| **predict** | 1716.4 ms | **5.68 ms** |
+
+The 1.7 s first prediction is one-time warm-up and must not be mistaken for throughput. Steady state is **5.68 ms per 640×640 inference on the GPU**, about 176 fps. Detecting on *every* frame of a 787-frame 4K/120 clip would take **4.5 s**; a 1361-frame 1080p/240 clip, **7.7 s**. The measurement window is a small fraction of either.
+
+**Two premises this project was carrying are now false, and matter more than the result itself.**
+
+- *"The Neural Engine is still untested, and it is the thing that ships."* Recorded under *Porting risks*. As the model stands, **what ships is the GPU.** The ANE is not a runtime this export can reach.
+- *"Native-resolution inference was the largest risk."* At 5.68 ms per crop it is not a throughput risk at all. The crop architecture is still right — it exists for diameter precision, not speed — but the speed argument for it was never the load-bearing one.
+
+**What is proven, stated exactly.** Every compute unit Core ML can actually use produces **identical box coordinates**, and confidences agreeing to within one part in 3,540. The device reproduces the Mac's diameters to two decimals on all four crops. Whatever the ANE would do to the boxes is **untested and currently unreachable** — and cannot be tested without a float16 re-export, which would itself change the numerics that test is meant to check.
+
+⚠️ **The frozen crops are gitignored.** `tools/frames/*` is excluded except `*-track.csv`, so `ane-inputs/` is not committed, while the clips it derives from are a single un-backed-up copy on the Desktop. If both are lost, 1.1 stops being reproducible — the same failure the per-frame tracks were committed to prevent. Not yet decided either way.
+
+### 2 — Get a known answer to debug against
+
+**2.1 Build the synthetic validation harness.** *(was Step 5)* Generate a ballistic trajectory with chosen parameters, project it through the pinhole model, and feed it to `compute_metrics.py`, so the maths can be checked independently of any footage. Every debugging session so far has lacked a known answer; this would have caught the landing-window bug in an afternoon. It also turns the noise tolerance and the ±15° guardrail from arguments into measured curves, and compares 1080p against 4K on the *same* kick, which no single-phone filming session can do.
+
+**2.2 Settle the 1080p focal length.** *(was Step 6)* Measure a distance to a stationary ball with a tape, film it at rest in both formats without moving the phone, and solve `fx = d · Z / D` for each. The 4K value is confirmed exactly; the 1080p value is 5.1% out and it is not known whether that is the lens or a sloppy pace — see *Camera capability*. It belongs here rather than later because no correction should be fitted on top of a possible 5% scale error. `shot-list.txt` now opens with this shot.
+
+### 3 — Fix the physics
+
+**3.1 Correct the progressive under-read in the detector's flight diameters.** *(was Step 5)* Fitted gravity averages 7.7 across nine clips, or 8.3 across the seven not flagged suspect, rather than 9.81, and this is the cause — see *The gravity discrepancy*. It can be corrected on either side of the export since the boxes match to 0.00%, subject to 1.1.
+
+**3.2 Diagnose kick 7**, which acquires for a single frame and collapses.
+
+**3.3 Diagnose kick 10**, which detects correctly but whose track only starts near the end of the clip.
+
+**3.4 End the fit window on a net impact and on the ball leaving the frame.** `find_landing()` detects only a bounce — a reversal in vertical image position after the apex — so it cannot see either of the two ways a flight normally ends in real use; see *Measurement Approach → Truncated flight is the normal case*. This is the same class of defect as the bounce-window bug that produced the gravity discrepancy: a window containing something that is not free flight, failing silently rather than visibly. It belongs in this section because it is physics work, it is fixed in Python where iteration is fast, and it must be right before 4.3 ports the fit to Swift.
+
+**What is already achieved here, and should not be re-litigated.** On every clip whose track reaches the ground, observed displacement matches the paced landing to within 3–10%. That is the first end-to-end validation this project has had: focal length from field of view, ball diameter as scale, per-frame depth and 3D geometry, all confirmed against a distance measured on the pitch rather than against themselves. Ten of eleven 2026-08-22 clips track the right ball and nine produce sound metrics, against two and zero before 2026-08-24.
+
 **Seven clips can never be checked against their paced landings, and no amount of processing will change that.** Their tracks end before the ball lands; raising `--max-gap` to 90 pushed out the termination frames while leaving every longest-unbroken segment unchanged, because the ball had left the picture. The footage does not contain the answer.
 
 The cause is that the session was filmed to measure kicks and then used to validate the pipeline, which want opposite framing — see *Measurement Approach*. `shot-list.txt` item 14 now requires the landing in shot for validation footage.
 
-**Step 6 — Verify on hardware what is written but untested.** Three things, all quick:
+### 4 — Port to the device
 
-- **The 1080p focal length.** Measure a distance to a stationary ball with a tape, film it at rest in both formats without moving the phone, and solve `fx = d · Z / D` for each. The 4K value is confirmed exactly; the 1080p value is 5.1% out and it is not known whether that is the lens or a sloppy pace — see *Camera capability*. Every distance from a 1080p clip rests on it. `shot-list.txt` now opens with this shot.
-
-- **The ball size metadata.** The picker builds and runs, but no recording has been checked. Record a clip and confirm the status panel reads `· ball 206.1 mm` rather than `BALL SIZE MISSING`. That is the half of the two-copy scheme that cannot be checked by looking at filenames in Files.
-- **Import and share in the clip browser.** Built in response to the AirDrop trouble and never exercised. Import a `.mov` from Files, and share one out.
-
-**Step 6b — Measure what Photos does to 240 fps.** Run a 1080p/240 clip through Photos by the same route the 4K/120 clip survived, and probe it.
-
-The store question no longer depends on this — `Documents/Clips/` stays on its own merits, for the reasons under *Should Photos be reconsidered as the store?*. The test is still worth running, but the reason has changed: it tells us what an **import probe** will encounter when a coach brings in a clip that has passed through Photos. That probe has to exist anyway for external footage, and this is the case it most needs to catch.
-
-**Step 7 — Port the pipeline to the app. This now comes before the rest of Step 5.** Export the detector to Core ML, drive it through `VNCoreMLRequest`, replace OpenCV registration with the Vision equivalents, and reimplement the trajectory fit in Swift.
-
-**The ordering was reversed on 2026-08-24.** This step previously read "not to be started before Step 5; porting a pipeline whose accuracy is unknown would only make its errors harder to find." That was right while the unknown was the *physics*; the physics is now validated against paced landings. The reason recorded at the time — that Core ML export would change the boxes — turned out to be false, but the reordering paid for itself anyway. See *Step 5*.
+*(was Step 7)* Export the detector to Core ML, drive it through `VNCoreMLRequest`, replace OpenCV registration with the Vision equivalents, and reimplement the trajectory fit in Swift.
 
 **Done on 2026-08-24:**
 
@@ -590,19 +704,43 @@ The store question no longer depends on this — `Documents/Clips/` stays on its
 - The crop architecture measured and validated — 640 px at native resolution matches full-frame 3840. This is what gets ported, not the Mac's full-frame approach.
 - A pinned export environment built so the conversion is reproducible.
 
-**Remaining, cheapest and most decisive first:**
+**4.1 Port the tracker with crop-based inference**, driven through `VNCoreMLRequest`: acquire once on a full frame, then track in 640 crops at native resolution.
 
-1. **Run the exported model on the Neural Engine and repeat the box comparison.** Everything above was measured on the Mac's CPU or GPU. The ANE may use float16 and is what ships. Until this is done the export is validated only as a conversion, not as a runtime.
-2. **Port the tracker with crop-based inference**, driven through `VNCoreMLRequest`. Acquire once on a full frame, then track in 640 crops.
-3. **Correct the diameter bias**, which can now be done on either side since the boxes match.
-4. **Port the maths.** Low risk: `compute_metrics.py` is pure numpy and every call has an Accelerate equivalent.
-5. **Replace registration with Vision** and check it against the OpenCV results on the same clips, since it is a different algorithm rather than a reimplementation.
-6. **Add a camera distance control to the Record screen.** The acquisition gate needs the distance the coach paced out, captured per clip beside the ball size for the same reason — it describes the clip, not the app.
+⚠️ **The port needs NMS, or an equivalent, before the largest-candidate rule is applied.** Learned during 1.1. The model is exported with `nms=False` — deliberately, so `detect_ball.py` can do its own candidate selection — so its raw output fires many anchors on the same ball. The Mac applies largest-candidate to boxes Ultralytics has *already suppressed*, one per object. Applying the same rule to raw anchors instead selects the largest duplicate, which measured **0.46–1.36% high** on diameter across the four test crops. Largest-candidate acquisition is correct and is not in question; it is the input to it that must match. A systematic 1.4% diameter bias is small, but diameter precision is the weakest link in the pipeline and a 6–9% bias is the outstanding defect of 3.1, so it is not noise to absorb silently.
 
+**Working code for the decoding already exists** in `ANEComparison.swift` — reading `var_1223`, taking COCO class 32, converting centre/width/height to a diameter, handling float32 and float16 — written for 1.1 and verified against the Mac to two decimals. It is worth lifting rather than rewriting when this item starts.
 
-**Step 8 — Filming guardrails in the app.** Framing guidance before the kick, and a compliance check afterwards. The check is cheap and concrete: the ball's diameter trend across the flight measures how far off perpendicular the shot was, and background registration already measures camera movement. Both numbers exist in the Mac pipeline; nothing surfaces them to the coach.
+**4.2 Replace registration with Vision** and check it against the OpenCV results on the same clips, since `VNTranslationalImageRegistrationRequest` is a different algorithm rather than a reimplementation.
 
-**Step 9 — A results screen.** Nothing in the app displays a metric. Whatever it shows must label carry and apex as theoretical, and should surface the quality signals — off-square angle, camera drift, fitted gravity — rather than presenting a bare number as though it were certain.
+**4.3 Port the maths.** Last of the port work because it is the lowest risk — `compute_metrics.py` is pure numpy and every call has an Accelerate equivalent — and because it should be ported after the physics above is corrected, not before.
+
+### 5 — Feed the pipeline what it needs at capture
+
+**5.1 Write the true `videoFieldOfView` into each clip at capture**, so the app stops assuming `fx` the way the Mac pipeline hardcodes 1260 or 2520 — see *Porting risks*.
+
+**5.2 Add a camera distance control to the Record screen.** *(was Step 7.6)* The acquisition gate needs the distance the coach paced out, captured per clip beside the ball size for the same reason — it describes the clip, not the app.
+
+### 6 — Make the output usable
+
+**6.1 Surface the quality signals** — off-square angle, camera drift, fitted gravity. *(was Step 8)* Coaches cannot pass flags, so a bad clip must explain itself. The check is cheap and concrete: the ball's diameter trend across the flight measures how far off perpendicular the shot was, and background registration already measures camera movement. Both numbers exist in the Mac pipeline; nothing surfaces them to the coach. Framing guidance before the kick belongs here too.
+
+**6.2 Build the results screen.** *(was Step 9)* Nothing in the app displays a metric. Whatever it shows must label carry and apex as theoretical, and should present the quality signals from 6.1 rather than a bare number as though it were certain.
+
+### Off the critical path — hardware checks not blocking the above
+
+These were Step 6 and Step 6b. They are quick, they are worth doing at the next opportunity, and nothing in sections 1–6 waits on them.
+
+- **The ball size metadata.** The picker builds and runs, but no recording has been checked. Record a clip and confirm the status panel reads `· ball 206.1 mm` rather than `BALL SIZE MISSING`. That is the half of the two-copy scheme that cannot be checked by looking at filenames in Files.
+- **Import and share in the clip browser.** Built in response to the AirDrop trouble and never exercised. Import a `.mov` from Files, and share one out.
+- **Measure what Photos does to 240 fps.** *(was Step 6b)* Run a 1080p/240 clip through Photos by the same route the 4K/120 clip survived, and probe it. The store question no longer depends on this — `Documents/Clips/` stays on its own merits, for the reasons under *Should Photos be reconsidered as the store?*. The reason has changed: it tells us what an **import probe** will encounter when a coach brings in a clip that has passed through Photos. That probe has to exist anyway for external footage, and this is the case it most needs to catch.
+
+### Why the order changed, kept because the reasoning still applies
+
+**Porting was moved ahead of the remaining accuracy work on 2026-08-24, on a premise the export has since disproven.** The worry was that the bias belongs to the PyTorch model's boxes and that Core ML export would change them, so measuring it first would mean measuring it twice. Measured 2026-08-24, the export reproduces the boxes to **0.00%** — so the bias would have transferred and the reordering was not necessary for that reason.
+
+It was worth doing anyway, and by some distance. Exporting first is what surfaced the crop architecture, which resolved the largest porting risk on the books and revealed that full-frame 1280 — the obvious on-device compromise — silently loses the ball mid-flight. Neither would have been found by finishing the accuracy work first. **The decision was right; the stated reason was wrong.**
+
+That history is why section 1 sat at the top: the one thing the export had not proven was the runtime, and the same class of mistake — building on numerics that turn out to differ — is what the device comparison foreclosed. **It has since been run and the runtime is proven**, so section 1 is closed and section 2 is the live work. The reordering paid for itself twice: once by surfacing the crop architecture, and again by revealing that the ANE this project planned around is not reachable at all.
 
 ### Optional, not scheduled
 
@@ -861,7 +999,7 @@ So the detector's box degrades as the ball recedes and blurs. **The horizontal s
 
 **Correcting the diameter bias itself is the remaining work, and it can be done on either side.** The concern was that the bias belongs to *this* detector's bounding boxes and that a Core ML export would change the numerics, so characterising it on the Mac risked measuring it twice. Measured 2026-08-24, the export reproduces the boxes to **0.00%** — the bias is a property of the architecture, not the runtime, and whatever is learned on the Mac transfers.
 
-One caveat survives: that comparison ran on the Mac's CPU or GPU, not the Neural Engine, which may use float16. Until the box comparison is repeated on a device, "the numerics are identical" is proven for the conversion and assumed for the runtime.
+**That caveat is now discharged.** The comparison was repeated on an iPhone 17 Pro on 2026-08-24: the device reproduces the Mac's diameters to two decimals on all four test crops, box coordinates are identical across every compute unit, and the Neural Engine turns out to be unreachable by this Float32 export in any case. "The numerics are identical" is proven for the runtime as well as the conversion, so **whatever is learned about the diameter bias on the Mac transfers to the device without qualification.** See punch list item 1.1.
 
 **The earlier four-run table has been removed** rather than kept. Every figure in it was produced by fitting past the end of the flight, so the numbers measured the bug and not the footage. The one finding from it that survives on its own evidence is that detector input resolution matters: raising `--imgsz` from 1280 to 1920 on the same 4K clip cut range scatter from 200 mm to 118 mm. `--imgsz` now defaults to the clip's own width.
 

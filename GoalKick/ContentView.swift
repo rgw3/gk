@@ -12,6 +12,7 @@ struct ContentView: View {
 
     private enum Tab: Hashable {
         case record, review
+        case ane          // TEMPORARY — punch list 1.1, remove with ANEComparison.swift
     }
 
     @State private var selection: Tab = .record
@@ -32,6 +33,14 @@ struct ContentView: View {
                     Label("Review", systemImage: "play.rectangle.fill")
                 }
                 .tag(Tab.review)
+
+            // TEMPORARY — punch list item 1.1. Delete this tab and
+            // ANEComparison.swift once the Neural Engine question is settled.
+            ANEComparisonView()
+                .tabItem {
+                    Label("ANE", systemImage: "cpu")
+                }
+                .tag(Tab.ane)
         }
         // Fires when a clip is AirDropped to GoalKick, or opened into it from
         // the Files app. Without the CFBundleDocumentTypes declaration in

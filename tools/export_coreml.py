@@ -44,6 +44,28 @@ matches full-frame 3840 accuracy while the model sees only 640 px:
 The ball keeps every pixel it had; only the empty grass around it is
 discarded. That is the architecture to port: acquire once on a full frame,
 then track in crops.
+
+Settled on device, 2026-08-24 (punch list item 1.1, project_notes.md).
+An iPhone 17 Pro reproduces the diameters above to two decimals, and box
+coordinates are identical across CPU, GPU and .all. Two things that were
+assumed here turned out to be wrong, and both are worth knowing before
+touching this file:
+
+  - The Neural Engine is NOT what runs. This export is Float32, the ANE
+    requires float16, and none of the model's 242 compute operations
+    lists the ANE as supported. Every one prefers the GPU. Staying on
+    Float32 is a recorded decision, not an oversight.
+
+  - Native-resolution inference was never a throughput problem. The GPU
+    runs a 640 px inference in 5.68 ms -- every frame of a 787-frame 4K
+    clip in 4.5 s. The crop architecture is still right, but for diameter
+    precision, which is the reason that survives.
+
+One trap for whoever ports this. Ultralytics applies NMS before selecting
+a box; the model itself is exported with nms=False, so a raw Core ML
+decoder has none. Applying the pipeline's largest-candidate rule to raw
+anchors picks the largest DUPLICATE and reads 0.5-1.4% high. The rule is
+right; the input to it has to be suppressed boxes.
 """
 import argparse
 import sys
@@ -52,6 +74,18 @@ from pathlib import Path
 SPORTS_BALL = 32          # COCO class index
 DEFAULT_MODEL = "yolo11n.pt"
 CROP = 640
+
+# The Core ML export lives inside the app target, not at the repo root, and
+# there is deliberately only one copy of it. GoalKick/ is a synchronized
+# folder, so anything in it joins the app automatically and Xcode compiles
+# this into yolo11n.mlmodelc at build time -- which means the app will not
+# build without it. Keeping a second copy at the root would have been ~10 MB
+# of duplicate binary in git and two files free to drift apart on the next
+# re-export.
+#
+# Consequence for `export`: ultralytics writes its output next to the .pt
+# weights, so a fresh export lands at the repo root and has to be moved here.
+DEFAULT_COREML = "GoalKick/yolo11n.mlpackage"
 
 
 def biggest_ball(model, image, imgsz):
@@ -145,10 +179,18 @@ def run_compare(args) -> None:
     print(f"Worst diameter difference: {worst:.2f}%")
     print()
     print("Measured on 2026-08-24 this was 0.00% on every frame, so the")
-    print("conversion preserves the boxes exactly. Note what that does and")
-    print("does not prove: ultralytics runs Core ML on the Mac's CPU or GPU,")
-    print("not the Neural Engine. The ANE may use float16 and is the thing")
-    print("that actually ships, so this has to be repeated on a device.")
+    print("conversion preserves the boxes exactly.")
+    print()
+    print("This has since been confirmed on the device as well, so the")
+    print("caveat that used to sit here is discharged. An iPhone 17 Pro")
+    print("reproduces these diameters to two decimals, and box coordinates")
+    print("are identical across CPU, GPU and .all.")
+    print()
+    print("The Neural Engine turned out not to be involved: the export is")
+    print("Float32, the ANE requires float16, and not one of the model's")
+    print("242 compute operations lists it as a supported device. The GPU")
+    print("runs it at 5.68 ms per 640 px inference. Staying on Float32 is")
+    print("a recorded decision -- see project_notes.md punch list item 1.1.")
 
 
 def run_sizes(args) -> None:
@@ -205,6 +247,104 @@ def run_sizes(args) -> None:
     print("port would fall into, because it presents as bad physics.")
 
 
+def run_dump(args) -> None:
+    """Freeze the comparison inputs to disk, and baseline them from disk.
+
+    Item 1.1 of the punch list asks whether the Neural Engine changes the
+    boxes. Answering that means running the same model on the same pixels
+    on a phone, and "the same pixels" is the hard part: if the Mac decodes
+    the clip with OpenCV and the phone decodes it with AVFoundation, any
+    difference in the answer is ambiguous between the runtime and the
+    decoder. So the crops are written once, here, and both sides read the
+    same files.
+
+    The baseline below is deliberately measured by handing the model a
+    PNG *path* rather than the in-memory crop. Reading back what was
+    written is what proves the file is the input, not a lossy copy of it.
+
+    Colour order is the trap worth naming. OpenCV works in BGR and
+    cv2.imwrite expects BGR, so the PNG on disk has correct colour;
+    cv2.imread gives BGR back and ultralytics expects that. On the phone
+    the same PNG loads as RGB and Core ML's image input wants RGB. Both
+    sides are therefore correct without either converting -- but only
+    because the file sits in the middle. Feeding Swift a raw BGR buffer
+    would swap red and blue and quietly change every box.
+    """
+    import cv2
+    from ultralytics import YOLO
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+
+    capture = cv2.VideoCapture(str(args.clip))
+    if not capture.isOpened():
+        sys.exit(f"Could not open {args.clip}")
+
+    cases = []
+    for entry in args.cases.split(";"):
+        frame, cx, cy, truth = entry.split(",")
+        cases.append((int(frame), int(cx), int(cy), float(truth)))
+
+    torch_model = YOLO(args.model)
+    coreml_model = YOLO(args.coreml)
+
+    print(f"Writing {CROP}x{CROP} native-resolution crops to {out}/")
+    print()
+    print(f"{'file':>28} {'truth':>9} {'pytorch':>18} {'coreml(cpu/gpu)':>18}")
+
+    written = 0
+    for frame_number, cx, cy, truth in cases:
+        capture.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+        ok, image = capture.read()
+        if not ok:
+            print(f"{'f' + str(frame_number):>28}   could not read")
+            continue
+
+        x0 = max(0, min(image.shape[1] - CROP, cx - CROP // 2))
+        y0 = max(0, min(image.shape[0] - CROP, cy - CROP // 2))
+        window = image[y0:y0 + CROP, x0:x0 + CROP]
+
+        name = f"crop-f{frame_number:05d}-x{x0}-y{y0}.png"
+        path = out / name
+        if not cv2.imwrite(str(path), window):
+            sys.exit(f"Could not write {path}")
+        written += 1
+
+        # Read it back from disk. The file is the experiment's input, so
+        # the baseline has to come from the file.
+        a = biggest_ball(torch_model, str(path), CROP)
+        b = biggest_ball(coreml_model, str(path), CROP)
+        left = f"{a[0]:7.2f}px c{a[1]:.2f}" if a else "not found"
+        right = f"{b[0]:7.2f}px c{b[1]:.2f}" if b else "not found"
+        print(f"{name:>28} {truth:8.1f}px {left:>18} {right:>18}")
+
+    capture.release()
+    print()
+    print(f"Wrote {written} crops.")
+    print()
+    print("The crop origin is in each filename because the diameter is the")
+    print("only number being compared and it is crop-relative -- but the")
+    print("centre is not, and 4.1 will need to map a crop box back to the")
+    print("full frame. Recording it now costs nothing and saves guessing.")
+    print()
+    print("These PNGs are the frozen input for punch list item 1.1, which")
+    print("is COMPLETE -- there is nothing further to run here. They are")
+    print("kept because they are the fixed reference the device was")
+    print("checked against, and regenerating them is how you would re-check")
+    print("it after any change to the export.")
+    print()
+    print("What 1.1 found, on an iPhone 17 Pro: the device reproduces the")
+    print("pytorch column above to two decimals, box coordinates are")
+    print("identical across every compute unit, and the Neural Engine is")
+    print("unreachable because this export is Float32. See project_notes.md.")
+    print()
+    print("One caveat if you compare a device run against this table by")
+    print("hand. Ultralytics applies NMS before picking a box; a raw Core")
+    print("ML decoder has none, so 'largest candidate' over raw anchors")
+    print("selects the largest DUPLICATE and reads 0.5-1.4% high. Compare")
+    print("against the most-confident box, or apply NMS first.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Export the detector to Core ML and verify it.",
@@ -224,7 +364,7 @@ def build_parser() -> argparse.ArgumentParser:
                              help="check the export against the weights")
     compare.add_argument("clip", type=Path)
     compare.add_argument("--model", default=DEFAULT_MODEL)
-    compare.add_argument("--coreml", default="yolo11n.mlpackage")
+    compare.add_argument("--coreml", default=DEFAULT_COREML)
     compare.add_argument("--frames", default="620,660,700,740",
                          help="comma-separated frame numbers")
     compare.add_argument("--at", default=None,
@@ -244,6 +384,22 @@ def build_parser() -> argparse.ArgumentParser:
                        help="semicolon-separated frame,cx,cy,true_diameter; "
                             "defaults are kick 11 of the 2026-08-22 session")
     sizes.set_defaults(func=run_sizes)
+
+    dump = sub.add_parser("dump",
+                          help="freeze the 640 crops to PNG for the device")
+    dump.add_argument("clip", type=Path)
+    dump.add_argument("--model", default=DEFAULT_MODEL)
+    dump.add_argument("--coreml", default=DEFAULT_COREML)
+    dump.add_argument("--out", default="tools/frames/ane-inputs",
+                      help="directory to write the crops into")
+    dump.add_argument("--cases",
+                      default="620,3178,1618,57.2;660,2985,1525,52.4;"
+                              "700,2271,1309,37.7;740,1855,1341,30.4",
+                      help="semicolon-separated frame,cx,cy,true_diameter; "
+                           "defaults are kick 11 of the 2026-08-22 session, "
+                           "the same four frames the crop architecture was "
+                           "measured on")
+    dump.set_defaults(func=run_dump)
 
     return parser
 

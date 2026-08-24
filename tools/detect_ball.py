@@ -587,8 +587,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Deliberately limited to the two smallest models. The app has to run this
     # on an iPhone or iPad, so whatever is proven here must export to Core ML
-    # and fit on the Neural Engine. yolo11n is ~6 MB and yolo11s ~19 MB; the
-    # larger variants would prove something that cannot ship.
+    # and run on the device. yolo11n is ~6 MB and yolo11s ~19 MB; the larger
+    # variants would prove something that cannot ship.
+    #
+    # This used to say "fit on the Neural Engine". Measured on device
+    # 2026-08-24, the Float32 Core ML export cannot reach the ANE at all and
+    # runs on the GPU at 5.68 ms per 640 px inference, so ANE fit is not the
+    # binding constraint -- but staying small is still right for app size and
+    # for keeping a float16 re-export open. See project_notes.md item 1.1.
     parser.add_argument("--model", default="yolo11n.pt",
                         choices=["yolo11n.pt", "yolo11s.pt"],
                         help="pre-trained weights (default yolo11n.pt); "
