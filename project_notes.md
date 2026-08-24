@@ -264,9 +264,15 @@ Measurement is being developed in Python on the Mac before anything is ported to
 | `tools/extract_frames.py` | `probe` (verify real frame timing against nominal), `sheet` (contact sheet to locate the kick), `extract` (frames as PNGs) |
 | `tools/detect_ball.py` | YOLO detection, background registration, continuity gating; writes the per-frame CSV |
 | `tools/compute_metrics.py` | Reads that CSV; 3D reconstruction, trajectory fit, landing detection, both flight models |
-| `tools/export_coreml.py` | Converts the detector to Core ML and checks the export against the weights. **Runs under `.venv-export`, not `.venv`** |
+| `tools/validate.py` | Checks the pipeline against ground truth: `carry` (observed displacement vs paced landing), `height` (camera height, independent of `fx`), `tilt` (principal-point sweep, kept as a negative result) |
+| `tools/export_coreml.py` | Converts the detector to Core ML, checks the export against the weights, and reproduces the crop-vs-full-frame measurement. **Runs under `.venv-export`, not `.venv`** |
+| `tools/sessions/*.csv` | Ground truth per filming session: which file is which kick, the paced landing, the paced camera distance, and whether the track reaches the ground |
 | `tools/requirements.txt` | `opencv-python`, `numpy`, `ultralytics` — the analysis environment |
 | `tools/requirements-export.txt` | Pinned `torch`, `coremltools`, `ultralytics` — the export environment |
+
+**The kick-to-file mapping lives in `tools/sessions/2026-08-22.csv`, not in this document.** Landing distances quoted here by kick number are meaningless without it, and prose is the wrong place for a lookup table that code also has to read. `validate.py` reads it directly, so the numbers in this file and the numbers the tools produce cannot drift apart.
+
+> ⚠️ **The clips are not in this repository.** Eleven files, about 1.3 GB, at `~/Desktop/clips/`. Nothing under `tools/` can be reproduced without them — every command in *Next Steps → Step 5* will fail with no useful explanation if they are missing or moved. They are the only copy and they are not backed up anywhere the repository knows about.
 
 **The CSV is the interface between detection and physics**, so the arithmetic can be re-run in a second without paying for the model again.
 
@@ -467,6 +473,17 @@ Two things worth doing whenever this resumes:
 
 1. **A synthetic validation harness.** Every debugging session so far has lacked a known answer. Generating a ballistic trajectory with chosen parameters, projecting it through the pinhole model, and feeding it to `compute_metrics.py` would establish whether the maths is right independently of any footage — and would turn the noise tolerance and the ±15° guardrail from arguments into measured curves. It would also compare 1080p against 4K on the *same* kick, which no single-phone filming session can do. It would have caught the landing-window bug in an afternoon.
 2. **Two clips still fail and are not understood.** Kick 7 acquires for a single frame and collapses; kick 10 detects correctly but its track only starts near the end of the clip. Neither is diagnosed.
+
+**Before anything else, check the prerequisites.** The eleven clips must be at `~/Desktop/clips/`, and both virtual environments must exist — `tools/.venv` from `tools/requirements.txt`, and `tools/.venv-export` from `tools/requirements-export.txt`. Both are gitignored and neither survives a fresh clone. Each requirements file carries its own build instructions.
+
+**Then validate against ground truth**, which is the fastest way to see whether anything has regressed:
+
+```
+./tools/.venv/bin/python tools/validate.py carry
+./tools/.venv/bin/python tools/validate.py height
+```
+
+`carry` should report four clips between −3% and −10%; `height` should read about 1.09 m across three. Different numbers mean something changed.
 
 **Reproducing the current results.** Detection, then metrics; the 4K clips need their dimensions passed:
 
@@ -685,6 +702,8 @@ Kick 11 is the deliberate off-square control the shot list called for — roughl
 **The formats came out 3 × 1080p/240 and 8 × 4K/120**, not the planned five and five; kicks 1, 6 and 7 are the 1080p ones. All eleven probe clean — real frame timing matches nominal, rotation 0° in metadata on every clip. Clips live at `~/Desktop/clips/`.
 
 **Two things this session established beyond the metrics.** The scale model checks out: the ball at rest measured 56.8 px against a predicted 56.8 px for a Size 4 at 10 yards through `fx` 2520, which is the first time focal length, ball diameter and a real measured distance have been confirmed to agree. And the cones, laid out at a known spacing, are an independent scale reference in the ground plane — useful in their own right, and the same technique that would let the app measure footage from a camera whose lens it knows nothing about.
+
+**Which file is which kick is recorded in `tools/sessions/2026-08-22.csv`**, along with the paced landings and which clips reach the ground. Everything below is by kick number and needs that file to be usable.
 
 **Results, as of 2026-08-24.** Ten of eleven clips track the right ball; nine produce sound metrics. Kick 7 acquires for a single frame and collapses; kick 10 detects correctly but its track starts near the end of the clip. Neither is diagnosed.
 

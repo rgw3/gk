@@ -151,6 +151,60 @@ def run_compare(args) -> None:
     print("that actually ships, so this has to be repeated on a device.")
 
 
+def run_sizes(args) -> None:
+    """Reproduce the measurement that chose the on-device architecture.
+
+    Full frame downscaled to various sizes, against a 640 crop at native
+    resolution. Kept as code rather than only as a table in the docstring:
+    the conclusion decided what gets ported, and it should be re-checkable
+    on new footage and on a different model.
+    """
+    import cv2
+    from ultralytics import YOLO
+
+    model = YOLO(args.model)
+    capture = cv2.VideoCapture(str(args.clip))
+    if not capture.isOpened():
+        sys.exit(f"Could not open {args.clip}")
+
+    cases = []
+    for entry in args.cases.split(";"):
+        frame, cx, cy, truth = entry.split(",")
+        cases.append((int(frame), int(cx), int(cy), float(truth)))
+
+    sizes = [int(s) for s in args.sizes.split(",")]
+    header = "".join(f"{f'full@{s}':>18}" for s in sizes)
+    print(f"{'frame':>6} {'truth':>8}{header}{'crop640@native':>18}")
+
+    for frame_number, cx, cy, truth in cases:
+        capture.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+        ok, image = capture.read()
+        if not ok:
+            print(f"{frame_number:6d}   could not read")
+            continue
+
+        x0 = max(0, min(image.shape[1] - CROP, cx - CROP // 2))
+        y0 = max(0, min(image.shape[0] - CROP, cy - CROP // 2))
+        window = image[y0:y0 + CROP, x0:x0 + CROP]
+
+        cells = []
+        for image_in, size in [(image, s) for s in sizes] + [(window, CROP)]:
+            found = biggest_ball(model, image_in, size)
+            if found is None:
+                cells.append(f"{'not found':>18}")
+            else:
+                cells.append(f"{found[0]:7.2f}px {100 * (found[0] / truth - 1):+5.1f}%"
+                             f" c{found[1]:.2f}")
+        print(f"{frame_number:6d} {truth:7.1f}px" + "".join(cells))
+
+    capture.release()
+    print()
+    print("Measured 2026-08-24 on a 4K clip: the 640 crop matched full-frame")
+    print("3840 while the model saw 1/36th the pixels. Full-frame 1280 lost")
+    print("the ball mid-flight and read 33% high late -- the trap a naive")
+    print("port would fall into, because it presents as bad physics.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Export the detector to Core ML and verify it.",
@@ -177,6 +231,19 @@ def build_parser() -> argparse.ArgumentParser:
                          help="cx,cy to centre the crop on; defaults to the "
                               "frame centre")
     compare.set_defaults(func=run_compare)
+
+    sizes = sub.add_parser("sizes",
+                           help="crop vs full-frame at various input sizes")
+    sizes.add_argument("clip", type=Path)
+    sizes.add_argument("--model", default=DEFAULT_MODEL)
+    sizes.add_argument("--sizes", default="1280,3840",
+                       help="full-frame input sizes to compare")
+    sizes.add_argument("--cases",
+                       default="620,3178,1618,57.2;660,2985,1525,52.4;"
+                               "700,2271,1309,37.7;740,1855,1341,30.4",
+                       help="semicolon-separated frame,cx,cy,true_diameter; "
+                            "defaults are kick 11 of the 2026-08-22 session")
+    sizes.set_defaults(func=run_sizes)
 
     return parser
 
