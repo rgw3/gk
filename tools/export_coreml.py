@@ -471,6 +471,113 @@ def run_blur(args) -> None:
     print("  light-level decision rather than a fixed one.")
 
 
+def run_scale(args) -> None:
+    """Does the detector's diameter bias grow as the ball gets smaller?
+
+    THE LAST THING THAT COULD JUSTIFY THE FILMING DISTANCE GUARDRAIL
+
+    project_notes.md asks the coach to stand 5-12 m away, on the grounds
+    that this "sets a floor on pixels across the ball" so that "accuracy
+    becomes a known quantity rather than a lottery". Measured with the
+    synthetic harness, neither half of that holds up as physics:
+
+      - random diameter noise is suppressed by sqrt(N) across the fit, so
+        speed scatter is 0.03% at 5 m and only 0.18% at 27 m
+      - a systematic relative bias costs the SAME at every distance --
+        residual flat at 50.6 mm from 5 m to 27 m
+
+    So the guardrail cannot rest on the physics. What is left is the
+    detector: either it stops finding the ball at all when the ball gets
+    small, or its bias as a FRACTION of the ball grows as the ball
+    shrinks. This measures the second. The first is already known to bite
+    hard -- at 640 input a 57 px ball becomes 9.5 px and is not found.
+
+    METHOD, AND WHY IT IS SYNTHETIC
+
+    The at-rest crop has a ball of known diameter, sharp, unblurred, at
+    confidence 0.96. Downscaling it shrinks the ball by an exactly known
+    factor while holding blur, background, lighting and pose constant, so
+    any change in relative error is apparent size and nothing else.
+
+    The four real crops span 58.28 down to 30.35 px and could be used
+    instead, but in a real flight the ball blurs and the background
+    changes as it recedes -- and that confounding is precisely what has
+    made this bias so hard to pin down. Isolation is worth a resampling
+    artifact.
+
+    The frame is reflect-padded back to 640 after downscaling, so the
+    model always sees its native input size and only the ball's share of
+    it changes. Reflection is used rather than a flat fill because grass
+    reflected is still plausible grass, and a black border would be a
+    feature the detector has never seen.
+    """
+    import cv2
+    from ultralytics import YOLO
+
+    source = Path(args.crop)
+    if not source.exists():
+        sys.exit(f"{source} not found. Run `dump` first.")
+
+    image = cv2.imread(str(source))
+    if image is None:
+        sys.exit(f"Could not read {source}")
+
+    model = YOLO(args.model)
+    ball_m = args.ball_mm / 1000.0
+
+    print(f"Scale response of {args.model} on {source.name}")
+    print(f"Ball is {args.truth:.2f} px at full size, sharp and at rest.")
+    print()
+    print("Downscaled and reflect-padded back to 640, so only the ball's")
+    print("share of the frame changes. Implied distance assumes fx 2520.")
+    print()
+    print(f"{'target':>8}{'true':>9}{'measured':>11}{'error':>9}"
+          f"{'conf':>7}{'implied Z':>11}")
+
+    for target in [float(v) for v in args.targets.split(",")]:
+        factor = target / args.truth
+        side = max(8, int(round(CROP * factor)))
+        small = cv2.resize(image, (side, side), interpolation=cv2.INTER_AREA)
+
+        pad = CROP - side
+        if pad > 0:
+            top = pad // 2
+            left = pad // 2
+            small = cv2.copyMakeBorder(small, top, pad - top, left,
+                                       pad - left, cv2.BORDER_REFLECT_101)
+
+        true_diameter = args.truth * factor
+        found = biggest_ball(model, small, CROP)
+        if found is None:
+            print(f"{target:7.0f}px{true_diameter:8.2f}px{'NOT FOUND':>11}"
+                  f"{'--':>9}{'--':>7}{'--':>11}")
+            continue
+
+        measured, confidence = found
+        error = 100 * (measured / true_diameter - 1)
+        implied = args.fx * ball_m / measured
+        print(f"{target:7.0f}px{true_diameter:8.2f}px{measured:10.2f}px"
+              f"{error:+8.1f}%{confidence:7.2f}{implied:10.2f}m")
+
+    print()
+    print("HOW TO READ THIS")
+    print()
+    print("  If the error column is FLAT, the detector's bias is a constant")
+    print("  fraction of the ball and standing further back costs nothing")
+    print("  in bias -- only in the risk of losing the ball entirely. The")
+    print("  5-12 m guardrail would then be about detection, not accuracy,")
+    print("  and should say so.")
+    print()
+    print("  If the error GROWS as the ball shrinks, that is the mechanism")
+    print("  the guardrail has been missing, and the distance limit is")
+    print("  justified on its own terms at last.")
+    print()
+    print("  Watch the confidence column too. Where it falls away is where")
+    print("  the detector is starting to struggle, and it led the diameter")
+    print("  error in the blur test by a clear margin -- 0.73 at 12 px of")
+    print("  smear, then nothing at all at 17.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Export the detector to Core ML and verify it.",
@@ -547,6 +654,23 @@ def build_parser() -> argparse.ArgumentParser:
     blur.add_argument("--fx", type=float, default=2520.0)
     blur.add_argument("--distance", type=float, default=9.14)
     blur.set_defaults(func=run_blur)
+
+    scale = sub.add_parser("scale",
+                           help="does diameter bias grow as the ball shrinks?")
+    scale.add_argument("--crop",
+                       default="tools/frames/ane-inputs/"
+                               "crop-f00620-x2858-y1298.png",
+                       help="a crop of the ball AT REST, sharp and unblurred")
+    scale.add_argument("--model", default=DEFAULT_MODEL)
+    scale.add_argument("--truth", type=float, default=58.28,
+                       help="measured diameter in px at full size")
+    scale.add_argument("--targets", default="58,50,40,30,25,20,15,12,10",
+                       help="ball diameters in px to shrink to. At fx 2520 "
+                            "these span roughly 9 m to 52 m; 26 px is 20 m "
+                            "and 19 px is 27 m, where a whole flight fits")
+    scale.add_argument("--ball-mm", type=float, default=206.1)
+    scale.add_argument("--fx", type=float, default=2520.0)
+    scale.set_defaults(func=run_scale)
 
     return parser
 

@@ -39,6 +39,13 @@ tools/frames/*
 !tools/frames/
 !tools/frames/*-track.csv
 
+# Except the SYNTHETIC track, which is the opposite case. It is written
+# fresh by every synth_track.py run and is reproducible exactly from its
+# seed, so committing it would add diff churn on every run while adding
+# no recoverability. The real tracks are kept because the footage behind
+# them might vanish; this one's source is code that is already in git.
+tools/frames/synthetic-track.csv
+
 # Pre-trained model weights. Ultralytics downloads these on first run, so
 # they are reproducible rather than source.
 *.pt

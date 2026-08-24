@@ -137,6 +137,8 @@ The crop matches full-frame 3840 accuracy while the model sees only 640 px — *
 
 **The detection floor is measured.** At 640 the detector finds nothing at all on a 4K frame, because a 6× downscale turns a 57 px ball into 9.5 px. 960 is the minimum that finds it; confidence only firms up above 2560. So the architecture to port is: acquire once on a full frame at 1280–2560, then track in 640 crops at native resolution.
 
+**That floor is a property of the ball's size in pixels, not of the input setting** — measured independently 2026-08-24 by shrinking a sharp crop rather than by downscaling a frame, the detector holds accuracy to ±2% down to **20 px of ball** and finds nothing at **15 px**. The two findings are the same limit reached by different routes, which is why an aggressive `--imgsz` and an over-distant camera fail identically. See punch list 2.1 rung 13, which also converts the floor into a working distance: **26 m at 4K, 13 m at 1080p**.
+
 **The export changes nothing, which was not a foregone conclusion.** The same frames through `yolo11n.pt` and `yolo11n.mlpackage` give **0.00% difference** in box diameter and identical confidences to two decimals. That means the diameter bias under *The gravity discrepancy* is a property of the architecture rather than the runtime, and characterising it on the Mac is not wasted. The distance gate's 1.3 factor and the 1.6 diameter tolerance likewise carry over.
 
 **The Neural Engine is unreachable by this export, and the GPU is what ships.** This section previously read "the Neural Engine is still untested, and it is the thing that ships." Measured on device 2026-08-24 by Xcode's Core ML performance report, that is false: the model's `storagePrecision` is Float32, the ANE requires float16, and **not one of the 242 compute operations lists the Neural Engine as a supported device.** Every one prefers the GPU. See punch list item 1.1 for the measurement.
@@ -192,9 +194,9 @@ Three consequences, all binding:
 ⚠️ **Two of the rationales in that table have been superseded by measurement and are not yet rewritten.** The guardrails themselves may well be right; what is wrong is *why* they are said to be right, and a reader taking the reasons at face value would draw false conclusions about where accuracy comes from. Measured 2026-08-24 with the synthetic harness — see punch list item 2.1:
 
 - **"±15° of perpendicular … foreshortening under-reads velocity by roughly `cos φ`."** With exact diameters, off-square filming costs **nothing at all out to 45°**. That reasoning describes a 2D image-plane measurement; this pipeline reconstructs depth per frame and recovers the out-of-plane component. What off-square really does is **amplify diameter error** — at a 6% bias, 15° turns a 0% gravity error into 3.9% — so the guardrail earns its place, by a different mechanism, and would become irrelevant if 3.1 were fixed.
-- **"5–12 m … accuracy becomes a known quantity rather than a lottery."** Random error does not behave like a lottery at any distance in that range: speed scatter is 0.03% at 5 m and 0.18% at 27 m, because the range smoothing suppresses random diameter noise by √N. The real risks of standing back are **detection failure** and **systematic bias as the box shrinks**, neither of which has been measured.
+- **"5–12 m … accuracy becomes a known quantity rather than a lottery."** **This one is now measured and the rationale is simply wrong.** Accuracy is not a lottery at any distance: random noise is suppressed by √N so speed scatter is 0.03% at 5 m and 0.18% at 27 m; a systematic relative bias costs the same at every distance; and the detector's relative diameter error does **not** grow as the ball shrinks — flat within ±2% across a factor of three in apparent size. **The real limit is detection, and it is a cliff rather than a slope**: the ball is found at 20 px with confidence 0.60 and not found at all at 15 px. That converts to a working distance of **26 m at 4K and only 13 m at 1080p**, and the ball recedes during flight.
 
-**Both are left as they stand deliberately.** Replacing a guardrail's justification needs the measurement that would replace it, and in each case that measurement has not been taken.
+**The off-square rationale is left as it stands deliberately**, since replacing it needs a measurement of the guardrail's real cost that has not been taken. **The distance rationale should be rewritten** — the measurement exists, and what it says is that the number may be about right while the reason is not. The guardrail is protecting against losing the ball, not against imprecision, and it should say so, because the two imply different remedies: a coach who stands too far back does not get a worse answer, they get **no answer**.
 
 **Whether the landing must be in frame depends on what the clip is for, and the two answers conflict.** This is worth stating plainly because `shot-list.txt` and this table appear to disagree, and neither is wrong.
 
@@ -344,7 +346,7 @@ Measurement is being developed in Python on the Mac before anything is ported to
 | `tools/compute_metrics.py` | Reads that CSV; 3D reconstruction, trajectory fit, landing detection, both flight models |
 | `tools/validate.py` | Checks the pipeline against ground truth: `carry` (observed displacement vs paced landing), `height` (camera height, independent of `fx`), `tilt` (principal-point sweep, kept as a negative result) |
 | `tools/synth_track.py` | Trajectories with a **known** answer. `generate` writes a synthetic track CSV that `compute_metrics.py` reads unmodified; `check` also runs the real physics over it and prints truth against recovered; `sweep` re-fits one track at a series of window lengths; `study noise\|geometry\|format\|distance` runs repeated seeded trials across a swept parameter and reports mean and spread. Injects off-square geometry, drag, centroid noise, diameter noise as a fraction **or in pixels**, and two diameter-bias models — recession-driven and blur-driven. **Use `--diameter-noise-px`, not `--diameter-noise`, for anything comparing formats or distances:** a fraction holds relative error constant by construction and measures nothing, which invalidated the first format study and a first attempt at the distance curve. Built 2026-08-24; see punch list item 2.1 for what it has found |
-| `tools/export_coreml.py` | Converts the detector to Core ML, checks the export against the weights, reproduces the crop-vs-full-frame measurement, and — `dump`, added 2026-08-24 — freezes the 640 crops to PNG as the fixed input for the on-device comparison in punch list item 1.1. **Runs under `.venv-export`, not `.venv`** |
+| `tools/export_coreml.py` | Converts the detector to Core ML and checks the export against the weights. `sizes` reproduces the crop-vs-full-frame measurement; `dump` freezes the 640 crops to PNG as the fixed input for item 1.1; `blur` measures how the detector's box responds to motion blur in isolation; `scale` measures whether its bias grows as the ball shrinks. The last three were added 2026-08-24 and between them establish the detector's two hard limits — it loses the ball at ~29% of its width in smear, and below ~20 px of ball. **Runs under `.venv-export`, not `.venv`** |
 | `tools/sessions/*.csv` | Ground truth per filming session: which file is which kick, the paced landing, the paced camera distance, and whether the track reaches the ground |
 | `tools/requirements.txt` | `opencv-python`, `numpy`, `ultralytics` — the analysis environment |
 | `tools/requirements-export.txt` | Pinned `torch`, `coremltools`, `ultralytics` — the export environment |
@@ -885,7 +887,9 @@ A window starting just after contact sees blur *decreasing* and recession *incre
 
 **4K/120 is the more precise configuration**, on a like-for-like kick with a like-for-like detector: gravity scatter 0.05 against 0.08, speed scatter 0.08 against 0.10, residual 2.4 mm against 4.0 mm. Twice the pixels across the ball beats twice the temporal samples. Notably the win is **less than the 2:1 the pixel counts suggest** — 1080p/240 recovers much of it by having twice as many samples to average — but it is a win, and it is consistent across all three columns.
 
-⚠️ **This does not yet settle the open question, because motion blur is not modelled per format.** *Which capture configuration gives better metric accuracy* lists 1080p/240's advantage as a shorter exposure and therefore less blur, and that is real: exposure is at most 4.2 ms at 240 fps against 8.3 ms at 120 fps, and image speed in pixels is halved again at 1080p because `fx` is halved. So blur in pixels is roughly **four times lower** at 1080p/240, or about **twice** lower relative to the ball's own size. **That is the same factor of two, pointing the other way**, and the two effects may simply cancel.
+⚠️ **This paragraph previously claimed 1080p/240 has a structural ~2× blur advantage. That was wrong, and the error is worth keeping.** The reasoning was that blur in pixels is four times lower at 1080p/240 — exposure at most 4.2 ms against 8.3 ms, and `fx` halved again — so about twice lower relative to the ball's own size.
+
+**The mistake was forgetting that `fx` cancels.** Relative blur is `blur_px / ball_px = (fx·v/Z)·exposure / (fx·D/Z) = v·exposure/D`. The focal length divides out, so **at a given exposure both formats smear the ball by the same fraction of its own width.** 240 fps helps only when exposure is capped by the frame interval, which happens in falling light — and by then both are past the point where the detector finds the ball at all. See *The detector's blur response*.
 
 **The harness can answer this** — `study format --blur-bias ... --blur-reference ...` puts a blur-driven diameter bias into both formats, and the blur term is already keyed to image speed in pixels per frame, which captures the format difference automatically. Until that is run, the honest statement is: **4K/120 is better on static diameter precision by a clear margin, and 1080p/240 has a blur advantage of similar size that has not been measured.**
 
@@ -933,7 +937,7 @@ A window starting just after contact sees blur *decreasing* and recession *incre
 
 ⚠️ **Random diameter error is averaged away. Systematic diameter error is not.** That is why a 6% progressive bias wrecks the fit while 2.6% random noise barely registers, and it is the single clearest statement of why **3.1 is the priority and noise is not**.
 
-**What this does not say.** The study models random noise only. The real risks of standing further back are **detection failure** — at 640 input a 57 px ball becomes 9.5 px and is not found at all — and **systematic bias growing as the box gets smaller**, neither of which is modelled here. The 5–12 m guardrail may well be right; what this shows is that its stated justification, an accuracy lottery from too few pixels, is not the mechanism. **Not corrected in the guardrail table, for the same reason as the off-square rationale: what should replace it is a measurement not yet taken.**
+**What this does not say.** The study models random noise only, so it leaves two detector mechanisms untested: **detection failure**, and **systematic bias growing as the box gets smaller**. **Both have since been measured — see rung 13.** Bias is flat as the ball shrinks; detection fails below about 20 px of ball. So the 5–12 m guardrail's stated justification, an accuracy lottery from too few pixels, is not the mechanism, and what replaces it is a detection limit rather than an accuracy one.
 
 **Rung 12 — a systematic bias, held constant, across distance.** Same sweep with a 6% recession bias at 15° off-square:
 
@@ -947,7 +951,35 @@ A window starting just after contact sees blur *decreasing* and recession *incre
 
 **So distance does not amplify a given relative bias**, and combined with rung 11 this closes out the physics side of the guardrail question: **neither random noise nor systematic bias gets meaningfully worse with distance.** Everything left that could justify the 5–12 m guardrail is a property of the *detector* — whether its bias fraction grows as the ball shrinks, and whether it stops finding the ball at all. No synthetic study can reach either, which the tool now says in its own output.
 
-Remaining use, not yet exercised: whether the detector's bias fraction grows with apparent ball size, which is the last thing standing between here and a justified filming distance.
+**Rung 13 — does the detector's bias grow as the ball shrinks? No. Measured 2026-08-24 with `export_coreml.py scale`**, downscaling the sharp at-rest crop so the ball shrinks while blur, background, lighting and pose are held constant:
+
+| ball | measured | error | confidence | implied Z at 4K |
+|---|---|---|---|---|
+| 58 px | 58.55 px | +0.9% | 0.96 | 8.87 m |
+| 50 px | 48.99 px | −2.0% | 0.95 | 10.60 m |
+| 40 px | 39.70 px | −0.8% | 0.96 | 13.08 m |
+| 30 px | 29.64 px | −1.2% | 0.86 | 17.52 m |
+| 25 px | 24.90 px | −0.4% | 0.69 | 20.86 m |
+| 20 px | 20.08 px | +0.4% | 0.60 | 25.86 m |
+| 15 px | **NOT FOUND** | — | — | — |
+| 12, 10 px | **NOT FOUND** | — | — | — |
+
+**The error column is flat** — scattered between −2.0% and +0.9%, mean −0.5%, with no monotonic trend across a factor of three in apparent size. Relative diameter accuracy simply does not degrade as the ball gets smaller. **Confidence does**, falling steadily from 0.96 to 0.60, and then the ball is not found at all.
+
+⚠️ **So the 5–12 m guardrail is about DETECTION, not accuracy, and the reason recorded in *Measurement Approach* is wrong.** It says the distance limit "sets a floor on pixels across the ball" so that "accuracy becomes a known quantity rather than a lottery". Measured, accuracy is *not* a lottery at any distance — random noise is averaged away (rung 11), a systematic bias costs the same everywhere (rung 12), and relative bias does not grow as the ball shrinks (here). What actually happens is that the detector works, works, works, and then **stops**, somewhere between 20 px and 15 px of ball.
+
+**And the detection floor converts into a working distance that differs sharply by format:**
+
+| | 20 px, last found | 15 px, lost |
+|---|---|---|
+| 4K/120 (`fx` 2520) | **26.0 m** | 34.6 m |
+| 1080p/240 (`fx` 1260) | **13.0 m** | 17.3 m |
+
+**1080p has half the working distance of 4K, and that is a practical problem rather than a theoretical one.** The ball recedes during flight — this document records one measured flight running from 9 m to 24 m. At 4K that stays inside the floor throughout. **At 1080p it crosses below 20 px at about 13 m and the detector loses it mid-flight**, which is not a subtle degradation but a hard stop.
+
+**This is a candidate explanation for something already on the books.** Kicks 1, 6 and 7 are the three 1080p clips of the 2026-08-22 set, and all three are the troubled ones: kick 1 is flagged SUSPECT at gravity 4.40, kick 7 fails entirely — "acquires for a single frame and collapses" — and kick 6 is the only clean one and also the shortest kick of the set at 9 yards, so it recedes least. **Not proof**, since kick 10 is 4K and also fails, but it is a specific, testable hypothesis where before there was none. Worth checking against 3.2 and 3.3.
+
+**Section 2.1 is complete.** The physics is validated, three premises have been overturned, one defect found and handed to 3.5, and both detector questions — blur response and scale response — are measured.
 
 **2.2 Settle the 1080p focal length.** *(was Step 6)* Measure a distance to a stationary ball with a tape, film it at rest in both formats without moving the phone, and solve `fx = d · Z / D` for each. The 4K value is confirmed exactly; the 1080p value is 5.1% out and it is not known whether that is the lens or a sloppy pace — see *Camera capability*. It belongs here rather than later because no correction should be fitted on top of a possible 5% scale error. `shot-list.txt` now opens with this shot.
 
@@ -1006,6 +1038,15 @@ The cause is that the session was filmed to measure kicks and then used to valid
 ### 6 — Make the output usable
 
 **6.1 Surface the quality signals** — off-square angle, camera drift, fitted gravity. *(was Step 8)* Coaches cannot pass flags, so a bad clip must explain itself. The check is cheap and concrete: the ball's diameter trend across the flight measures how far off perpendicular the shot was, and background registration already measures camera movement. Both numbers exist in the Mac pipeline; nothing surfaces them to the coach. Framing guidance before the kick belongs here too.
+
+⚠️ **Two hard operating limits were measured on 2026-08-24 and neither is checked anywhere.** These are not quality *signals* — they are the difference between a measurement and no measurement at all, and they are known **before** the kick:
+
+- **Exposure.** The detector loses the ball entirely at about 29% of its width in smear. At 30 m/s that needs roughly **1/728 s**; if exposure runs to the frame interval, as it does in falling light, relative blur is 61% at 240 fps and 121% at 120 fps, both far past failure. `AVCaptureDevice.exposureDuration` is readable live, so the app can warn *before* recording rather than after. **A higher frame rate does not rescue this** — relative blur is `v·exposure/D` and the focal length cancels.
+- **Distance.** The detector finds nothing below about 20 px of ball, which is 26 m at 4K and only **13 m at 1080p**. The ball recedes during flight, so a clip can start inside the limit and cross out of it mid-flight.
+
+**Both belong in front of the coach at capture time, not in a post-hoc quality report.** See *The detector's blur response* and 2.1 rung 13.
+
+**Neither is in `shot-list.txt` either**, which the filming protocol section says should be kept in step with this document.
 
 **6.2 Build the results screen.** *(was Step 9)* Nothing in the app displays a metric. Whatever it shows must label carry and apex as theoretical, and should present the quality signals from 6.1 rather than a bare number as though it were certain.
 
@@ -1066,7 +1107,7 @@ Most of the pipeline is kick-agnostic — it measures a ball's launch conditions
 
 **Which capture configuration gives better metric accuracy: 1080p at 240 fps, or 4K at 120 fps?**
 
-- **1080p at 240 fps** — roughly 12.5 cm of ball travel between frames at 30 m/s. Twice the trajectory samples, and the shorter per-frame exposure means less motion blur, which matters because blur inflates the apparent ball diameter and degrades the centroid. Calibrated from field of view; no intrinsic matrix available.
+- **1080p at 240 fps** — roughly 12.5 cm of ball travel between frames at 30 m/s. Twice the trajectory samples. The claim that a shorter exposure means less blur **holds only in poor light**, where exposure is capped by the frame interval; at a given exposure relative blur is identical between the formats because `fx` cancels. That blur *inflates* the apparent diameter is now confirmed directly — +4.7% at 12 px of smear. Calibrated from field of view; no intrinsic matrix available. **Working distance is only 13 m before the detector loses the ball**, against 26 m at 4K.
 - **4K at 120 fps** — roughly 25 cm between frames, but four times the pixels across the ball, so a more precise diameter estimate, which propagates into distance and therefore into every metric.
 
 **Both configurations are currently calibrated from field of view, and 4K/120's intrinsic matrix is not in fact an advantage today.** The camera reports intrinsics only to a live capture session; they are **not stored in the recorded movie file**. Deliverable 1 analyses a saved video, so intrinsics are unavailable at analysis time unless they are captured alongside the recording and written to a sidecar — which has not been built. Until it is, the choice is purely samples-and-blur versus pixels-on-ball.
@@ -1088,7 +1129,9 @@ Relative blur is `v · exposure / D`. The focal length **cancels**, so at a give
 
 **So, provisionally: 4K/120.** In light good enough for the pipeline to function, blur is equal in relative terms and 4K's extra pixels win on precision — measured at roughly 1.3–1.6× better scatter on every column. An earlier note here claimed 1080p/240 had a structural ~2× blur advantage; that is wrong, and it came from forgetting that `fx` cancels.
 
-⚠️ **Two things keep this provisional rather than settled.** The launch-time origin defect of 3.5 contaminates the speed column with a frame-rate-dependent offset, so a format comparison is not clean until that is fixed. And whether the detector's *bias* grows as the ball shrinks has not been measured, which is the one remaining mechanism that could favour 4K further or undercut it.
+**A second, larger argument for 4K has since been measured: working distance.** The detector loses the ball entirely below about 20 px, which is **26 m at 4K but only 13 m at 1080p**. The ball recedes during flight — one measured flight runs from 9 m to 24 m — so at 1080p it can cross below the floor *mid-flight* and the track simply ends. Suggestively, the three 1080p clips of the 2026-08-22 set are the three troubled ones. See *The detector's blur response* and punch list 2.1 rung 13.
+
+⚠️ **One thing keeps this provisional.** The launch-time origin defect of 3.5 contaminates the speed column with a frame-rate-dependent offset — `--skip-frames 3` is 12.5 ms at 240 fps against 25 ms at 120 fps — so a format comparison is not clean on that metric until it is fixed. The precision and working-distance arguments are unaffected by it.
 
 **Pixels on the ball, and why filming distance dominates accuracy**
 
