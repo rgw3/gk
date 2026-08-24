@@ -140,7 +140,8 @@ def find_landing(samples: list[dict], sustain: int) -> int | None:
 
 
 def reconstruct(samples: list[dict], ball_metres: float, fx: float,
-                principal: tuple[float, float]):
+                principal: tuple[float, float],
+                rest_diameter: float | None = None):
     """Recover true 3D position per frame from image position and diameter.
 
     Range comes from the ball's apparent size: Z = fx * D / d. Image position
@@ -153,6 +154,31 @@ def reconstruct(samples: list[dict], ball_metres: float, fx: float,
     wobble would otherwise be injected into every axis. Fitting the trend
     keeps the real depth change and discards the noise.
 
+    `rest_diameter` anchors that line to the ball's resting size instead of
+    fitting it freely. It is **off by default, because it was tried and it
+    made things worse**, and the reason is worth keeping.
+
+    The flight diameters are known to be biased. At rest the ball is sharp,
+    still and averaged over hundreds of frames; in flight it is small and
+    blurred and the detector's box degrades with it -- at contact on one
+    clip the box collapsed from 58.4 to 42.9 px while confidence fell to
+    0.34. Camera height recovered from the ball on the ground at two ranges,
+    h = D*(cy1-cy2)/(d1-d2), which needs neither focal length nor principal
+    point, read 1.10 m against a phone actually held at about 1.4 m.
+
+    So anchoring to the one trustworthy measurement looked obvious. But a
+    free fit spreads the flight bias between intercept and slope, while
+    anchoring the intercept forces the *slope* to absorb all of it -- and
+    the slope is what the cross-term 2*u_dot*Z_dot/fx feeds on, which is
+    what the gravity fit is most sensitive to. Measured across the
+    2026-08-22 set, anchoring improved carry by a little and moved fitted
+    gravity the wrong way on nearly every clip: 8.13 to 6.11, 7.37 to 6.16,
+    7.01 to 6.25, 9.49 to 8.28.
+
+    The diagnosis stands and the remedy does not follow from it. Correcting
+    the diameter bias itself is the real fix; this flag is kept so the
+    experiment can be repeated rather than re-argued.
+
     Y is negated so that up is positive. This assumes the camera was roughly
     level; a tilted phone rotates the reconstructed axes, which is what the
     CoreMotion attitude correction in project_notes.md is eventually for.
@@ -164,7 +190,12 @@ def reconstruct(samples: list[dict], ball_metres: float, fx: float,
     diameter = np.array([s["diameter"] for s in samples])
 
     raw_range = fx * ball_metres / diameter
-    slope, intercept = np.polyfit(t, raw_range, 1)
+    if rest_diameter:
+        # Intercept is known; fit only the slope, through that fixed point.
+        intercept = fx * ball_metres / rest_diameter
+        slope = float(np.dot(t, raw_range - intercept) / np.dot(t, t))
+    else:
+        slope, intercept = np.polyfit(t, raw_range, 1)
     smoothed_range = slope * t + intercept
 
     x = (u - principal[0]) * smoothed_range / fx
@@ -403,7 +434,14 @@ def report(args) -> None:
             f"{contact}. Widen the detector's range, or set --contact-index."
         )
 
-    t, x, y, z, raw_range, smoothed = reconstruct(flight, ball_metres, fx, principal)
+    # The resting ball is the best diameter measurement in the clip, so it
+    # anchors the range profile. Needs enough frames to be worth trusting.
+    rest_diameter = None
+    if args.rest_anchor and len(stationary) >= 20:
+        rest_diameter = float(np.median([s["diameter"] for s in stationary]))
+
+    t, x, y, z, raw_range, smoothed = reconstruct(
+        flight, ball_metres, fx, principal, rest_diameter)
     parabola = fit_launch(t, x, y, z)
 
     mass = args.ball_g if args.ball_g is not None else \
@@ -594,6 +632,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--launch-height", type=float, default=None,
                         help="ball centre height at launch in metres "
                              "(default: one ball radius)")
+    parser.add_argument("--rest-anchor", action="store_true",
+                        help="anchor the range line to the ball's resting "
+                             "diameter instead of fitting it freely. Tested "
+                             "and NOT the default: it improves carry slightly "
+                             "and degrades the gravity check on most clips")
     parser.add_argument("--no-drag-fit", action="store_true",
                         help="fit launch conditions with a drag-free parabola "
                              "only; faster, and biased low by roughly 15%% on "
