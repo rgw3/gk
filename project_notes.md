@@ -111,11 +111,26 @@ The app is built as a **native iOS app in Swift**. This is decided. The requirem
 
 **The app will be better than the Mac in one respect.** `compute_metrics.py` hardcodes `fx` as 1260 or 2520 from an assumed 74.6° field of view. The app has `AVCaptureDevice.Format.videoFieldOfView` at capture time and can write the true value into each clip, exactly as it already does for ball size. That removes an assumption rather than porting one.
 
-**The largest risk is native-resolution inference.** `--imgsz` defaults to the clip's own width — 3840 for 4K — because diameter precision is what every distance rests on. A Core ML YOLO export normally takes 640 × 640; 3840 is **36× the pixels**, roughly 88 MB of input tensor in float16 before activations. It may run at a few hundred milliseconds a frame, but it is the least device-friendly thing in the pipeline and the accuracy work depends on it.
+**Native-resolution inference was the largest risk. It is solved, by cropping.** `--imgsz` defaults to the clip's own width — 3840 for 4K — because diameter precision is what every distance rests on. On a phone that is 36× the pixels a Core ML YOLO export normally takes, and it was the least device-friendly thing in the pipeline.
 
-**A better on-device architecture exists and has not been tried:** acquire once on a full frame, then run inference on a small crop around the predicted position for every frame after. Same effective resolution on the ball at a fraction of the compute, and it fits the tracker's existing predict-then-match structure. It would likely be faster *and* more accurate than what the Mac does. Worth testing on the Mac before porting, since it changes what gets ported.
+The way out is not a bigger model input but a smaller picture. Measured 2026-08-24 on a 4K clip, comparing the full frame downscaled against a **640 px crop at native resolution** centred where the ball is predicted to be:
 
-**Two things must be re-validated after export, not before.** The distance gate's 1.3 factor and the 1.6 diameter tolerance are properties of how the detector draws boxes. So, more importantly, is the diameter bias described under *The gravity discrepancy* — which is why Step 7 now comes before the rest of Step 5.
+| Frame | True diameter | full @1280 | full @3840 | **crop 640 @native** |
+|---|---|---|---|---|
+| at rest | 57.2 px | +0.6% | −0.1% | **+1.9%** |
+| early flight | 52.4 px | +6.0% | +0.1% | **+3.3%** |
+| mid flight | 37.7 px | **not found** | +0.0% | **−0.2%** |
+| late flight | 30.4 px | **+32.9%** | −1.6% | **−0.2%** |
+
+The crop matches full-frame 3840 accuracy while the model sees only 640 px — **1/36th the compute**. The ball keeps every pixel it had; only empty grass is discarded.
+
+**Note what the middle column says, because it is the trap.** Full-frame 1280 is what a naive port would reach for, and it does not merely degrade — it loses the ball mid-flight and reads 33% high late. That failure would surface as bad physics, not as a resolution problem, and would be very hard to attribute.
+
+**The detection floor is measured.** At 640 the detector finds nothing at all on a 4K frame, because a 6× downscale turns a 57 px ball into 9.5 px. 960 is the minimum that finds it; confidence only firms up above 2560. So the architecture to port is: acquire once on a full frame at 1280–2560, then track in 640 crops at native resolution.
+
+**The export changes nothing, which was not a foregone conclusion.** The same frames through `yolo11n.pt` and `yolo11n.mlpackage` give **0.00% difference** in box diameter and identical confidences to two decimals. That means the diameter bias under *The gravity discrepancy* is a property of the architecture rather than the runtime, and characterising it on the Mac is not wasted. The distance gate's 1.3 factor and the 1.6 diameter tolerance likewise carry over.
+
+**The Neural Engine is still untested, and it is the thing that ships.** Ultralytics runs Core ML on the Mac's CPU or GPU. The ANE may use float16, which could move box coordinates. The comparison in `tools/export_coreml.py compare` has to be repeated on a device before any of the above is settled.
 
 **Registration is unverified.** The Mac uses Shi-Tomasi features, Lucas-Kanade optical flow and a RANSAC affine estimate. `VNTranslationalImageRegistrationRequest` is a *different algorithm*, not a reimplementation. Drift of 250–390 px is currently being corrected on real clips, so this matters; equivalent in intent, unproven in effect.
 
@@ -141,13 +156,20 @@ It also means footage that ends early — a ball struck into a close net — sti
 
 | Guardrail | Why |
 |---|---|
-| Held steady, no deliberate pan | Handheld is the expected case — coaches will not carry tripods, and requiring one would make the app unusable. Over a ~0.15 s measurement window a steady hand drifts only a few pixels, worth roughly 1–3% on speed, and residual shake is removed in analysis by registering each frame against the background. **Panning is different in kind** and must be avoided: following the ball keeps it near frame centre while the whole background sweeps past, a far larger correction. Let the ball leave the frame instead. A tripod or any rest improves accuracy and should be used when available, but is not required. |
+| Held steady, no deliberate pan | Handheld is the expected case — coaches will not carry tripods, and requiring one would make the app unusable. Over a ~0.15 s measurement window a steady hand drifts only a few pixels, worth roughly 1–3% on speed, and residual shake is removed in analysis by registering each frame against the background. **Panning is different in kind** and must be avoided: following the ball keeps it near frame centre while the whole background sweeps past, a far larger correction. Never pan; let the ball leave the frame rather than chase it. A tripod or any rest improves accuracy and should be used when available, but is not required. |
 | 5–12 m from the ball | Sets a floor on pixels across the ball: ~52 px at 5 m, ~26 px at 10 m at 1080p. Accuracy becomes a known quantity rather than a lottery. |
 | Within ±15° of perpendicular to the kick | Off-axis foreshortening under-reads velocity by roughly `cos φ` — 3.4% at 15°, 13% at 30°. |
 | Ball stationary and in frame before the kick | The most accurate diameter measurement available is the ball at rest: sharp, unblurred, measurable over many frames. Scale is fixed there, once, rather than fought for mid-flight. It also makes contact detectable automatically — contact is the first frame the ball moves. |
 | No other footballs in shot, or none nearer than the one being kicked | Learned on 2026-08-22, where a bag of spares on the touchline and a game on the next pitch cost nine clips out of eleven. The detector cannot know which football matters; the *nearest* one is the measurement ball, and the acquisition rule depends on that staying true. A spare ball rolled closer to the camera than the one being struck would break it. |
 
-**Free flight ends at the bounce, and the fit has to stop there.** This is not a filming guardrail but it belongs with them, because it is the same class of mistake: a window that includes something other than free flight. A parabola fitted across a flight and its bounces is nearly a straight line and reports gravity near zero. `compute_metrics.py` now finds the landing and cuts there — see *The gravity discrepancy*.
+**Whether the landing must be in frame depends on what the clip is for, and the two answers conflict.** This is worth stating plainly because `shot-list.txt` and this table appear to disagree, and neither is wrong.
+
+- **For measuring a kick**, only launch conditions matter. Carry and apex are computed from them, so the ball never has to be filmed landing, and the coach should stand as close as the guardrails allow — closer means more pixels on the ball, and diameter precision is the weakest link in the chain.
+- **For validating the pipeline**, the landing must be in shot. Computed carry can only be checked against a paced distance if the footage shows where the ball actually came down, and the bounce is also what tells the software where free flight ended.
+
+The 2026-08-22 session was filmed for the first purpose and used for the second, which is why seven clips of eleven can never be checked against their paced landings — the ball had left the frame. `shot-list.txt` item 14 now requires the landing in shot, because that sheet exists to produce *validation* footage. Once the pipeline is trusted, ordinary use goes back to standing close.
+
+**Free flight ends at the bounce, and the fit has to stop there.** Not a filming guardrail but the same class of mistake: a window containing something other than free flight. A parabola fitted across a flight and its bounces is nearly a straight line and reports gravity near zero. `compute_metrics.py` now finds the landing and cuts there — see *The gravity discrepancy*.
 
 None of the filming guardrails is built. The app offers no framing guidance and performs no compliance check.
 
@@ -161,7 +183,9 @@ None of the filming guardrails is built. The app offers no framing guidance and 
 
 ### What does NOT exist yet
 
-**There is no measurement code in the app.** Detection, tracking and metrics exist only as Python on the Mac (see *Analysis pipeline*). The iOS app still captures, stores and reviews; it computes nothing. Nothing has been ported, and no Core ML model has been exported.
+**There is no measurement code in the app.** Detection, tracking and metrics exist only as Python on the Mac (see *Analysis pipeline*). The iOS app still captures, stores and reviews; it computes nothing, and no Swift has been written for any of it.
+
+**A Core ML model does exist** — `yolo11n.mlpackage` at the repo root, exported 2026-08-24 and verified to reproduce the PyTorch boxes exactly. It has never been loaded by the app, and it has never run on the Neural Engine.
 
 **The metrics are half-validated.** The reconstruction is confirmed: on every clip whose track reaches the ground, observed displacement matches a paced landing to within 3–10%. The flight fit is not: gravity averages 8.3 against 9.81, from a known cause — a progressive bias in the detector's flight diameters, detailed under *The gravity discrepancy*. **No figure should be shown to a coach yet**, but the open question is now a specific measurable defect rather than a mystery.
 
@@ -169,7 +193,9 @@ None of the filming guardrails is built. The app offers no framing guidance and 
 
 **Annotations are not saved.** Telestration strokes live only in memory and are lost when the clip changes or the app quits. There is no undo, one colour, one thickness.
 
-**The test targets remain empty.** No test has been written for either the Swift app or the Python tools. The pipeline has never been run against data with a known answer — see *Next Steps*.
+**The test targets remain empty.** No test has been written for either the Swift app or the Python tools.
+
+**No synthetic validation exists.** The pipeline has now been checked against *real* data with a known answer — the eleven paced landings of 2026-08-22 — but never against a generated trajectory whose launch conditions are known exactly. Real footage confirms the answer without isolating which stage is wrong when it is not; synthetic data would. See *Next Steps → Step 5*.
 
 ### What is done
 
@@ -185,11 +211,13 @@ Each of these is verified on hardware, not merely written. Details are in the se
 | **Pinch to zoom in Review** | Up to 8×, with pan, double-tap to zoom to a tapped point, and a persistent badge that resets. Built on `UIScrollView`. Verified on device. |
 | **Telestration** | Yellow strokes over the video that hold position while the clip plays, with on/off and clear buttons. Strokes are stored normalised to the picture, so they track the video through zoom, pan and rotation. Verified on device. |
 | **First footage** | Ten clips, 2026-08-21. Five at 1080p/240, five at 4K/120. Documented under *Open Questions → How should a goal kick be filmed?* |
-| **Step 3 — ball tracking** | Done, on the Mac. A stock `yolo11n` finds the ball across the flight with no training data. Acquisition takes the largest candidate rather than the most confident, which is what stops it locking onto other people's footballs elsewhere on the pitch; `--max-gap` is 30 frames so the blur blackout off the boot does not end the track. Output is the per-frame table Step 3 asked for. |
+| **Step 3 — ball tracking** | Done, on the Mac. A stock `yolo11n` finds the ball across the flight with no training data. Acquisition takes the largest candidate rather than the most confident, gated on the distance the coach paced out, which is what stops it locking onto other people's footballs elsewhere on the pitch; `--max-gap` is 30 frames so the blur blackout off the boot does not end the track. Ten of eleven 2026-08-22 clips track correctly. |
 | **Step 4 — metrics** | Written, on the Mac. Produces speed, launch angle, carry and apex, with both flight models side by side, cuts the fit at the bounce automatically, and fits launch conditions against the drag ODE rather than a parabola. Nine of eleven clips produce sound numbers. |
 | **Ground truth** | Eleven kicks filmed 2026-08-22 with paced landing distances, camera at 10 yards, cones at a measured 5 yards. The first data in the project's history against which a computed carry can be checked at all. |
 | **Reconstruction validated** | On every clip whose track reaches the ground, observed displacement matches the paced landing to within **3–10%**. Focal length from field of view, ball diameter as scale, per-frame depth and 3D geometry confirmed against a distance measured on the pitch rather than against themselves. |
-| **Portability audited** | 2026-08-24. The maths ports to Accelerate with no OpenCV dependency; the detector path carries the real risk. Recorded under *Porting risks*. |
+| **Portability audited** | 2026-08-24. The maths ports to Accelerate with no OpenCV dependency. Recorded under *Porting risks*. |
+| **Core ML export** | `yolo11n.mlpackage` at the repo root, reproducing the PyTorch boxes to 0.00%. Built with a pinned Python 3.9 environment. **Never run on the Neural Engine**, which is the runtime that ships. |
+| **Crop architecture proven** | A 640 px crop at native resolution matches full-frame 3840 accuracy at 1/36th the compute. This resolves the largest porting risk and is what gets ported. |
 
 ### Environment
 
@@ -235,8 +263,10 @@ Measurement is being developed in Python on the Mac before anything is ported to
 |---|---|
 | `tools/extract_frames.py` | `probe` (verify real frame timing against nominal), `sheet` (contact sheet to locate the kick), `extract` (frames as PNGs) |
 | `tools/detect_ball.py` | YOLO detection, background registration, continuity gating; writes the per-frame CSV |
-| `tools/compute_metrics.py` | Reads that CSV; 3D reconstruction, trajectory fit, both flight models |
-| `tools/requirements.txt` | `opencv-python`, `numpy`, `ultralytics` |
+| `tools/compute_metrics.py` | Reads that CSV; 3D reconstruction, trajectory fit, landing detection, both flight models |
+| `tools/export_coreml.py` | Converts the detector to Core ML and checks the export against the weights. **Runs under `.venv-export`, not `.venv`** |
+| `tools/requirements.txt` | `opencv-python`, `numpy`, `ultralytics` — the analysis environment |
+| `tools/requirements-export.txt` | Pinned `torch`, `coremltools`, `ultralytics` — the export environment |
 
 **The CSV is the interface between detection and physics**, so the arithmetic can be re-run in a second without paying for the model again.
 
@@ -260,9 +290,28 @@ The gate applies **only at acquisition**. The ball recedes from 9 m to 24 m duri
 
 **`--contact-threshold` defaults to 0.3 of peak speed, not 0.15.** A ball resting on grass is not motionless in the image: handheld drift ran 250–390 px across the 2026-08-22 clips, and what registration leaves behind clears a 15% bar for three frames. Two clips fired contact while the ball still sat there and fitted 400–550 frames of a stationary ball. 0.3 and 0.5 select the same contact frame on both, so this is a plateau rather than a tuned value.
 
-**`--imgsz` defaults to the clip's own width**, so nothing is thrown away before the detector sees it. This is not a minor setting: the model resizes each frame before looking at it, and a downscale degrades the ball's apparent diameter, which is what every distance in the pipeline rests on. Measured on one 4K clip, going from 0.33× to 0.50× cut range scatter from 200 mm to 118 mm. Native 4K is slow; `--imgsz 1920` is the quicker, coarser option.
+**`--imgsz` defaults to the clip's own width**, so nothing is thrown away before the detector sees it. This is not a minor setting: the model resizes each frame before looking at it, and a downscale degrades the ball's apparent diameter, which is what every distance in the pipeline rests on. Measured on one 4K clip, going from 0.33× to 0.50× cut range scatter from 200 mm to 118 mm.
 
-**Environment:** Python 3.14 with `tools/.venv`. PyTorch and OpenCV wheels resolved on 3.14 without needing an older interpreter.
+**The floor is measured**, on a 4K frame with the ball at a known 57.2 px:
+
+| `--imgsz` | Result |
+|---|---|
+| 640 | ball not found at all — a 6× downscale leaves it 9.5 px |
+| 960 | found, confidence 0.43 |
+| 1280 | found at rest, **lost mid-flight, 33% high late** |
+| 1920 | accurate, confidence 0.71 |
+| 3840 | accurate to 1.6% throughout, confidence 0.82–0.94 |
+
+`--imgsz 1920` remains the quicker, coarser option for the Mac. **Do not reach for 1280 to save time** — it fails in exactly the frames that matter and the symptom looks like bad physics rather than a bad setting.
+
+**On the device this changes shape entirely.** A 640 px crop at native resolution matches full-frame 3840 accuracy at 1/36th the compute — see *Porting risks*. The Mac pipeline does not yet do this, and adopting it here would make the Mac faster too.
+
+**There are two Python environments, deliberately, and they are allowed to disagree.**
+
+- **`tools/.venv`** — Python 3.14, torch 2.13, OpenCV. The analysis environment, used constantly, chosen for speed on this Mac. Wheels resolved on 3.14 without needing an older interpreter.
+- **`tools/.venv-export`** — Python 3.9 from `/usr/bin/python3`, with torch 2.7.1 and coremltools 9.0 pinned. Runs once per model version and does not care about speed. Both are gitignored; `tools/requirements-export.txt` carries the versions and the reasoning.
+
+The split is not tidiness. coremltools converts from TorchScript and is pinned to torch versions it has tested; on torch 2.13 it fails with a cascade of frontend errors, each patch revealing the next. **Hand-patching a model converter is a bad trade when the whole point is measuring bounding boxes to a few percent** — it can export cleanly and compute something subtly different. Under the pinned environment the export succeeded first time with no patches. Forcing one environment to do both jobs is what created the problem; separating them means the fast path never has to be downgraded to keep the export working.
 
 **Nothing here ships.** It is a spike whose findings port to Vision, Core ML and Accelerate. Two constraints keep it portable: the detector is restricted to `yolo11n` and `yolo11s` so it will fit on the Neural Engine, and no technique is used that lacks an Apple equivalent — which is why an OpenCV `HoughCircles` diameter refinement was removed rather than kept.
 
@@ -408,7 +457,11 @@ Steps 3 and 4 are written and running on the Mac. What follows is what remains.
 
 **What was achieved.** On every clip whose track reaches the ground, observed displacement matches the paced landing to within 3–10%. That is the first end-to-end validation this project has had: focal length from field of view, ball diameter as scale, per-frame depth and 3D geometry, all confirmed against a distance measured on the pitch rather than against themselves.
 
-**What remains, and why it is blocked deliberately.** Fitted gravity still averages 8.3 rather than 9.81, and the cause is a progressive bias in the detector's flight diameters — see *The gravity discrepancy*. That bias belongs to the PyTorch model's bounding boxes. Core ML export changes the numerics, so measuring it now risks measuring it twice. **Step 7 therefore comes first.**
+**What remains.** Fitted gravity still averages 8.3 rather than 9.81, and the cause is a progressive bias in the detector's flight diameters — see *The gravity discrepancy*. Correcting that bias is the outstanding work.
+
+**Step 7 was moved ahead of this, on a premise the export has since disproven.** The worry was that the bias belongs to the PyTorch model's boxes and that Core ML export would change them, so measuring it first would mean measuring it twice. Measured 2026-08-24, the export reproduces the boxes to **0.00%** — so the bias would have transferred and the reordering was not necessary for that reason.
+
+It was worth doing anyway, and by some distance. Exporting first is what surfaced the crop architecture, which resolved the largest porting risk on the books and revealed that full-frame 1280 — the obvious on-device compromise — silently loses the ball mid-flight. Neither would have been found by finishing the accuracy work first. **The decision was right; the stated reason was wrong.**
 
 Two things worth doing whenever this resumes:
 
@@ -425,7 +478,9 @@ for c in tools/frames/*-track.csv; do case "$c" in *1080p240*) W=1920; H=1080;; 
 
 **Check implied range before believing any metric.** If a clip reports the ball 20–31 m away when the camera stood at 9.1 m, it has locked onto someone else's football — see *Analysis pipeline*.
 
-**Five clips cannot be improved with this footage.** Their tracks end before the ball lands, and raising `--max-gap` to 90 pushed out the termination frames while leaving every longest-unbroken segment unchanged. Those balls leave the frame, which is precisely what `shot-list.txt` tells the coach to allow. That instruction is in tension with capturing the landing and the shot list has been amended.
+**Seven clips can never be checked against their paced landings, and no amount of processing will change that.** Their tracks end before the ball lands; raising `--max-gap` to 90 pushed out the termination frames while leaving every longest-unbroken segment unchanged, because the ball had left the picture. The footage does not contain the answer.
+
+The cause is that the session was filmed to measure kicks and then used to validate the pipeline, which want opposite framing — see *Measurement Approach*. `shot-list.txt` item 14 now requires the landing in shot for validation footage.
 
 **Step 6 — Verify on hardware what is written but untested.** Two things, both quick:
 
@@ -438,17 +493,23 @@ The store question no longer depends on this — `Documents/Clips/` stays on its
 
 **Step 7 — Port the pipeline to the app. This now comes before the rest of Step 5.** Export the detector to Core ML, drive it through `VNCoreMLRequest`, replace OpenCV registration with the Vision equivalents, and reimplement the trajectory fit in Swift.
 
-**The ordering was reversed deliberately on 2026-08-24 and the reasoning matters.** This step previously read "not to be started before Step 5; porting a pipeline whose accuracy is unknown would only make its errors harder to find." That was right while the unknown was the *physics*. It is no longer, because the physics is validated against paced landings and the one remaining defect is a property of the detector's bounding boxes — which Core ML export will change. Finishing the accuracy work on PyTorch boxes would mean measuring the same bias twice, the second time on the model that actually ships.
+**The ordering was reversed on 2026-08-24.** This step previously read "not to be started before Step 5; porting a pipeline whose accuracy is unknown would only make its errors harder to find." That was right while the unknown was the *physics*; the physics is now validated against paced landings. The reason recorded at the time — that Core ML export would change the boxes — turned out to be false, but the reordering paid for itself anyway. See *Step 5*.
 
-Order of work, cheapest and most decisive first:
+**Done on 2026-08-24:**
 
-1. **Export `yolo11n` to Core ML and confirm it detects the ball at all** on a known-good clip. Also settles whether the input resolution the accuracy work depends on is viable on device — see *Porting risks*.
-2. **Test acquire-then-crop inference**, which can be done on the Mac and may change what gets ported at all.
-3. **Re-measure the diameter bias on the exported model**, then finish Step 5 against boxes that will ship.
+- `yolo11n` exported to Core ML as `yolo11n.mlpackage`, verified to reproduce PyTorch boxes to 0.00%.
+- The crop architecture measured and validated — 640 px at native resolution matches full-frame 3840. This is what gets ported, not the Mac's full-frame approach.
+- A pinned export environment built so the conversion is reproducible.
+
+**Remaining, cheapest and most decisive first:**
+
+1. **Run the exported model on the Neural Engine and repeat the box comparison.** Everything above was measured on the Mac's CPU or GPU. The ANE may use float16 and is what ships. Until this is done the export is validated only as a conversion, not as a runtime.
+2. **Port the tracker with crop-based inference**, driven through `VNCoreMLRequest`. Acquire once on a full frame, then track in 640 crops.
+3. **Correct the diameter bias**, which can now be done on either side since the boxes match.
 4. **Port the maths.** Low risk: `compute_metrics.py` is pure numpy and every call has an Accelerate equivalent.
 5. **Replace registration with Vision** and check it against the OpenCV results on the same clips, since it is a different algorithm rather than a reimplementation.
+6. **Add a camera distance control to the Record screen.** The acquisition gate needs the distance the coach paced out, captured per clip beside the ball size for the same reason — it describes the clip, not the app.
 
-**Add a camera distance control to the Record screen** as part of this. The acquisition gate needs the distance the coach paced out, captured per clip beside the ball size for the same reason — it describes the clip, not the app.
 
 **Step 8 — Filming guardrails in the app.** Framing guidance before the kick, and a compliance check afterwards. The check is cheap and concrete: the ball's diameter trend across the flight measures how far off perpendicular the shot was, and background registration already measures camera movement. Both numbers exist in the Mac pipeline; nothing surfaces them to the coach.
 
@@ -699,7 +760,9 @@ So the detector's box degrades as the ball recedes and blurs. **The horizontal s
 
 **Anchoring the range line to the resting diameter followed obviously and was wrong.** A free fit spreads the flight bias between intercept and slope; anchoring the intercept forces the *slope* to absorb all of it, and the slope is what gravity is most sensitive to. Measured across the set it moved gravity the wrong way on nearly every clip — 8.13 → 6.11, 7.37 → 6.16, 7.01 → 6.25, 9.49 → 8.28 — while improving carry slightly. Kept as `--rest-anchor`, off by default, so the experiment can be repeated rather than re-argued.
 
-**Correcting the diameter bias itself is the remaining work, and it is deliberately not being done on the Mac.** The bias is a property of *this* detector's bounding boxes. A Core ML export changes the numerics — float16 on the Neural Engine, possibly different NMS — so characterising it here risks measuring it twice. See *Step 7*, which has been moved ahead of the rest of Step 5 for exactly this reason.
+**Correcting the diameter bias itself is the remaining work, and it can be done on either side.** The concern was that the bias belongs to *this* detector's bounding boxes and that a Core ML export would change the numerics, so characterising it on the Mac risked measuring it twice. Measured 2026-08-24, the export reproduces the boxes to **0.00%** — the bias is a property of the architecture, not the runtime, and whatever is learned on the Mac transfers.
+
+One caveat survives: that comparison ran on the Mac's CPU or GPU, not the Neural Engine, which may use float16. Until the box comparison is repeated on a device, "the numerics are identical" is proven for the conversion and assumed for the runtime.
 
 **The earlier four-run table has been removed** rather than kept. Every figure in it was produced by fitting past the end of the flight, so the numbers measured the bug and not the footage. The one finding from it that survives on its own evidence is that detector input resolution matters: raising `--imgsz` from 1280 to 1920 on the same 4K clip cut range scatter from 200 mm to 118 mm. `--imgsz` now defaults to the clip's own width.
 

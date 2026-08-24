@@ -20,6 +20,7 @@ Early development. **The app captures and reviews. The measurement works, but on
 | Importing and sharing clips | Built, not yet verified on device |
 | Ball detection and tracking | Working on 10 of 11 test clips — Mac-side Python only |
 | Metrics (velocity, angle, carry, apex) | Written — Mac-side Python only; reconstruction validated, flight fit biased |
+| Core ML export of the detector | Exported and verified against the weights; never run on the Neural Engine |
 | Any measurement inside the app | Not started |
 
 **Ball detection works.** A stock COCO object detector finds footballs with no training data and no assumptions about colour. The hard part turned out not to be detection but deciding *which* football matters — a pitch in use has several, and on one session a bag of spares on the touchline was tracked instead of the ball being kicked, in nine clips out of eleven. Acquisition now takes the nearest ball, which is the one the coach stood 10 yards from.
@@ -123,7 +124,11 @@ The CSV is the interface between detection and physics, so the arithmetic can be
 
 Nothing here ships. It is a spike whose findings port to Vision, Core ML and Accelerate, and it is constrained accordingly: only detector models small enough for the Neural Engine, and no technique without an Apple equivalent.
 
-**Everything must eventually run in Swift on an iPhone or iPad**, so the spike was audited against that. `compute_metrics.py` uses no OpenCV — it is pure numpy, and every call maps to Accelerate — so the physics is low risk. The detector path is not: the pipeline runs inference at the clip's native width because diameter precision drives every distance, and 3840 px is 36× the pixels a Core ML YOLO export normally takes. `project_notes.md` has the full audit.
+**Everything must eventually run in Swift on an iPhone or iPad**, so the spike was audited against that. `compute_metrics.py` uses no OpenCV — it is pure numpy, and every call maps to Accelerate — so the physics is low risk.
+
+The detector looked like the hard part. The pipeline runs inference at the clip's native width because diameter precision drives every distance, and 3840 px is 36× the pixels a Core ML YOLO export normally takes. **Cropping resolves it:** a 640 px window at native resolution, centred where the ball is predicted to be, matches full-frame 3840 accuracy at 1/36th the compute — the ball keeps every pixel it had and only empty grass is discarded. The obvious middle option, full-frame at 1280, is worse than it looks: it loses the ball mid-flight and reads 33% high late, and that failure would present as bad physics rather than a bad setting.
+
+The model is exported and committed as `yolo11n.mlpackage`, reproducing the PyTorch boxes to 0.00%. It has not yet run on the Neural Engine, which is the runtime that will actually ship. `project_notes.md` has the full audit.
 
 ## Project layout
 
