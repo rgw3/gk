@@ -219,6 +219,21 @@ Each of these is verified on hardware, not merely written. Details are in the se
 | **Core ML export** | `yolo11n.mlpackage` at the repo root, reproducing the PyTorch boxes to 0.00%. Built with a pinned Python 3.9 environment. **Never run on the Neural Engine**, which is the runtime that ships. |
 | **Crop architecture proven** | A 640 px crop at native resolution matches full-frame 3840 accuracy at 1/36th the compute. This resolves the largest porting risk and is what gets ported. |
 
+### Where README.md disagrees with this file
+
+Audited 2026-08-24. `README.md` is a public-facing overview and **this file is authoritative** where the two differ, but a reader may well meet the README first and take it at face value. These are the places it is currently behind, recorded here rather than fixed there — a deliberate decision, not an oversight.
+
+| README says | This file says |
+|---|---|
+| The 70-format camera scan, stated as measured fact | Flagged unverified: the scan code was not kept and nothing committed can check it — see *Camera capability* |
+| Photos retiming a 240 fps clip to 30 fps, stated as settled | A single unrepeated observation with no surviving artifact, and the sole basis for a storage decision the project is built on |
+| Nothing about the 2026-08-21 footage being gone | The clips no longer exist; only one track CSV survives |
+| Nothing about the 1080p focal length | It is 5.1% out on the only clip that can test it, so every distance from a 1080p clip may be short by that much |
+| Nothing about the input-size floor | Full-frame 1280 silently loses the ball mid-flight and reads 33% high late — the trap most likely to catch an implementer |
+| No status row for the crop architecture | The most consequential finding of 2026-08-24, and what determines the on-device design |
+
+**None of this makes the README wrong**, only incomplete and more confident than the evidence in places. Bring it into line whenever it is next touched; until then, treat any figure it gives as needing confirmation here.
+
 ### What rests on evidence the repository no longer holds
 
 Audited 2026-08-24. These claims are believed true and were measured at the time, but **nothing committed can check them**, so they should be treated as testimony rather than data. Listed because a document claiming to be a source of truth should say which of its statements it cannot support.
@@ -659,9 +674,13 @@ Relative range error tracks relative diameter error one for one. Half a pixel of
 
 **This is evidence for 4K/120** in the open question above. At realistic goal-kick range it roughly doubles the pixels across the ball, and the diameter estimate is the weakest link in the chain.
 
-**A constant-range assumption was tried and abandoned.** The reasoning was that for a side-on shot the ball stays at roughly constant range, so diameter could be averaged once to fix the scale and the flight treated as flat. Measured against real footage that failed silently and badly. The ball was travelling ~11–15° toward the camera, its apparent size grew across the flight, and the steadily inflating scale cancelled gravity's curvature almost exactly — the fit reported gravity as **−0.16 m/s²**, a straight line through what should have been a 48-pixel sag.
+**A constant-range assumption was tried and abandoned.** The reasoning was that for a side-on shot the ball stays at roughly constant range, so diameter could be averaged once to fix the scale and the flight treated as flat. Measured against real footage it failed silently and badly: the ball was travelling ~11–15° toward the camera, its apparent size grew across the flight, and the steadily inflating scale cancelled gravity's curvature almost exactly, reporting a straight line through what should have been a 48-pixel sag.
 
-**Depth is now computed per frame**, with the range trend smoothed by a straight-line fit before use: over a fifth of a second range changes almost linearly, while measured diameter wobbles a few percent frame to frame, and because both X and Y are multiplied by range that wobble would otherwise contaminate every axis. Moving to 3D raised fitted gravity from −0.16 to 3.49 m/s², which confirmed the diagnosis without resolving the problem.
+**The mechanism is the point and it still applies:** an error that grows monotonically with range does not add noise to the fit, it adds *curvature*, and curvature is the signal. The same shape of problem is what the flight-diameter bias does today — see *The gravity discrepancy*.
+
+**Depth is now computed per frame**, with the range trend smoothed by a straight-line fit before use: over a fifth of a second range changes almost linearly, while measured diameter wobbles a few percent frame to frame, and because both X and Y are multiplied by range that wobble would otherwise contaminate every axis.
+
+The gravity figures this section once quoted as evidence — −0.16 and 3.49 m/s² — have been removed. They were waypoints in a debugging sequence, measured through a pipeline that has since had its contact detection, its flight window and its fit all corrected, and they no longer reproduce: that clip now fits gravity at **10.90 m/s²**. Keeping them would leave two different figures for the same clip in one document.
 
 **What flight model produces carry distance and max height — drag-free, or with air resistance?**
 
