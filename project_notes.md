@@ -337,6 +337,10 @@ The split is not tidiness. coremltools converts from TorchScript and is pinned t
 
 ### Camera capability, measured on the iPhone
 
+> ⚠️ **This section is UNVERIFIED from the repository.** The scan was run on hardware during the capture spike and **the code that produced it no longer exists** — it was exploratory and was not kept. Nothing here can be re-derived from anything committed. The format count, the per-format intrinsics support, and every row of the table below rest entirely on that one session.
+>
+> **To re-verify** you would have to write the scan again: enumerate `device.formats`, apply each in turn with stabilization off, and query `connection.isCameraIntrinsicMatrixDeliverySupported`. It needs the iPhone; the Simulator exposes no real capture formats. Worth doing if any of these numbers ever look suspect, and worth keeping this time.
+
 The iPhone's back camera exposes **70 formats**. Every one was applied in turn, with video stabilization explicitly disabled, and its connection queried for intrinsic matrix support. Those relevant to measurement:
 
 | Resolution | Max fps | Intrinsics | fx from FOV |
@@ -350,6 +354,24 @@ The iPhone's back camera exposes **70 formats**. Every one was applied in turn, 
 **66 of 70 formats support intrinsic matrix delivery, and the 4 that do not are exactly the four 240 fps formats.** Intrinsics and 240 fps are mutually exclusive on this device. Stabilization was ruled out as the cause — it was off during the scan.
 
 Field of view is 74.6° for both 1080p formats, so `fx ≈ 1,260 px` either way. The 240 fps format is not optically different; it simply will not report its matrix.
+
+**The 4K figure is independently corroborated. The 1080p figure is not, and disagrees by 5%.**
+
+`fx` can be recovered from footage alone, with no reference to the scan: a ball of known diameter at a paced distance gives `fx = d · Z / D`. Measured on the 2026-08-22 clips, where the camera was paced at 10 yards:
+
+| Format | Ball at rest | Frames | Implied `fx` | Claimed | Implied FOV |
+|---|---|---|---|---|---|
+| 4K/120 (kick 11) | 56.78 px | 600 | **2519** | 2520 | **74.6°** |
+| 1080p/240 (kick 1) | 29.84 px | 979 | **1324** | 1260 | 71.9° |
+
+The 4K agreement is exact and settles the number that most of the measurement depends on — eight of eleven clips are 4K. **The 1080p result is 5.1% high and unresolved.** Two explanations fit and this data cannot separate them:
+
+- The camera was not actually at 10 yards for kick 1. `fx` 1260 would put it at 8.70 m, and a paced distance is easily 5% out.
+- The 1080p/240 format really is narrower than 74.6°, in which case **every distance derived from a 1080p clip is 5% short** — and that would be a systematic error in three of the eleven clips.
+
+Only kick 1 can test this. Kick 6 acquires too late to have a resting phase and kick 7 does not track at all, so the 1080p sample size is one.
+
+**Settling it costs a tape measure.** Place the ball at a measured distance, film it at rest in both formats, and solve for `fx` in each. Ten minutes, no kicking required, and it removes an unknown that sits underneath every 1080p measurement the project will ever make. Add it to the next filming session.
 
 Formats that look duplicated when listed by dimensions and frame rate alone are genuinely distinct — they differ in pixel format, binning, HDR support, or field of view.
 
@@ -511,7 +533,9 @@ for c in tools/frames/*-track.csv; do case "$c" in *1080p240*) W=1920; H=1080;; 
 
 The cause is that the session was filmed to measure kicks and then used to validate the pipeline, which want opposite framing — see *Measurement Approach*. `shot-list.txt` item 14 now requires the landing in shot for validation footage.
 
-**Step 6 — Verify on hardware what is written but untested.** Two things, both quick:
+**Step 6 — Verify on hardware what is written but untested.** Three things, all quick:
+
+- **The 1080p focal length.** Measure a distance to a stationary ball with a tape, film it at rest in both formats without moving the phone, and solve `fx = d · Z / D` for each. The 4K value is confirmed exactly; the 1080p value is 5.1% out and it is not known whether that is the lens or a sloppy pace — see *Camera capability*. Every distance from a 1080p clip rests on it. `shot-list.txt` now opens with this shot.
 
 - **The ball size metadata.** The picker builds and runs, but no recording has been checked. Record a clip and confirm the status panel reads `· ball 206.1 mm` rather than `BALL SIZE MISSING`. That is the half of the two-copy scheme that cannot be checked by looking at filenames in Files.
 - **Import and share in the clip browser.** Built in response to the AirDrop trouble and never exercised. Import a `.mov` from Files, and share one out.

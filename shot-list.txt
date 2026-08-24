@@ -9,6 +9,21 @@ BEFORE YOU START
 3. Pick a spot to the SIDE of the kick.
 
 
+FIRST, THE CALIBRATION SHOT - takes ten minutes, no kicking
+
+A. MEASURE, do not pace, a distance to the ball. A tape or a
+   measuring line. Write down the exact number.
+B. Film the ball sitting still for 10 seconds at 1080p / 240.
+C. Without moving the phone, switch to 4K / 120 and film it again
+   for 10 seconds.
+D. Write the measured distance next to both clip times.
+
+This settles the camera's focal length, which every distance the app
+computes is built on. The 4K value is confirmed. The 1080p value is
+5% out and nobody knows whether that is the lens or a sloppy pace -
+this shot answers it. Do it once and it never needs doing again.
+
+
 WHERE TO STAND
 
 4. Stand so the ball flies ACROSS your screen - left to right, or
