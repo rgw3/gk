@@ -187,7 +187,7 @@ None of the filming guardrails is built. The app offers no framing guidance and 
 
 **A Core ML model does exist** — `yolo11n.mlpackage` at the repo root, exported 2026-08-24 and verified to reproduce the PyTorch boxes exactly. It has never been loaded by the app, and it has never run on the Neural Engine.
 
-**The metrics are half-validated.** The reconstruction is confirmed: on every clip whose track reaches the ground, observed displacement matches a paced landing to within 3–10%. The flight fit is not: gravity averages 8.3 against 9.81, from a known cause — a progressive bias in the detector's flight diameters, detailed under *The gravity discrepancy*. **No figure should be shown to a coach yet**, but the open question is now a specific measurable defect rather than a mystery.
+**The metrics are half-validated.** The reconstruction is confirmed: on every clip whose track reaches the ground, observed displacement matches a paced landing to within 3–10%. The flight fit is not: gravity averages 7.7 across nine clips against 9.81, or 8.3 across the seven the tool does not flag as suspect, from a known cause — a progressive bias in the detector's flight diameters, detailed under *The gravity discrepancy*. **No figure should be shown to a coach yet**, but the open question is now a specific measurable defect rather than a mystery.
 
 **No filming guardrail is enforced or checked.** The app gives the coach no framing guidance and does not verify afterwards whether the shot was square, steady, or at a sensible distance — despite those being what makes the measurement work at all. The measurements needed for the check already exist in the Mac pipeline; nothing surfaces them.
 
@@ -475,7 +475,7 @@ Steps 3 and 4 are written and running on the Mac. What follows is what remains.
 
 **What was achieved.** On every clip whose track reaches the ground, observed displacement matches the paced landing to within 3–10%. That is the first end-to-end validation this project has had: focal length from field of view, ball diameter as scale, per-frame depth and 3D geometry, all confirmed against a distance measured on the pitch rather than against themselves.
 
-**What remains.** Fitted gravity still averages 8.3 rather than 9.81, and the cause is a progressive bias in the detector's flight diameters — see *The gravity discrepancy*. Correcting that bias is the outstanding work.
+**What remains.** Fitted gravity still averages 7.7 across nine clips, or 8.3 across the seven not flagged suspect, rather than 9.81, and the cause is a progressive bias in the detector's flight diameters — see *The gravity discrepancy*. Correcting that bias is the outstanding work.
 
 **Step 7 was moved ahead of this, on a premise the export has since disproven.** The worry was that the bias belongs to the PyTorch model's boxes and that Core ML export would change them, so measuring it first would mean measuring it twice. Measured 2026-08-24, the export reproduces the boxes to **0.00%** — so the bias would have transferred and the reordering was not necessary for that reason.
 
@@ -764,7 +764,9 @@ The quadratic term the fit calls "gravity" has two contributors: real image curv
 
 But the control kick was filmed **56.5° off perpendicular** — nearly four times the guardrail — with `vz` at +10.95 m/s, which is the most adverse geometry in the entire dataset. It fitted gravity to within 1.5% anyway. Whatever the cross-term costs, it is second order next to the window.
 
-**The whole set has since been run, and the window was not the only problem.** Fitted gravity across nine clips now clusters between 6.8 and 10.5, mean about **8.3** — far better than the old 3.5-to-12.3 spread, and still reading systematically low. What follows is what that residual bias turned out to be.
+**The whole set has since been run, and the window was not the only problem.** Fitted gravity across the nine clips that produce metrics runs from **4.40 to 10.48**, mean **7.73**. Excluding the two the tool itself flags SUSPECT — kicks 1 and 8 — the remaining seven run 7.01 to 10.48, mean **8.34**.
+
+Quote whichever is relevant but say which: the nine-clip mean is the honest headline, the seven-clip mean is what the pipeline achieves when it does not visibly fail. Both are well short of 9.81 and short in the same direction, which is the finding. Regenerate them rather than trusting these figures — see *Reproducing the current results*.
 
 **The vertical axis reads about 22% low while the horizontal validates.** On every clip whose track reaches the ground, observed displacement matches the paced landing to within 3–10%. The vertical does not, and the two share a range and a focal length.
 
@@ -785,7 +787,9 @@ The fit is *internally* consistent, which is why this hid for so long: with `vy`
 h = D·(cy₁ − cy₂)/(d₁ − d₂)
 ```
 
-— needs neither focal length nor principal point, and reads **1.10 m** across three clips against a phone held at about **1.4 m**. Working the geometry backwards on kick 9: the resting diameter is right (56.6 px, matching the paced 9.14 m to under 1%), while the landing diameter is under-read by 6.3% — 37.0 px where the flat-pitch constraint demands 39.5.
+— needs neither focal length nor principal point, and reads **1.09 m** across three clips against a phone held at about **1.4 m**. Run `validate.py height` to regenerate it.
+
+Working the geometry backwards on kick 9: the resting diameter is right, within a percent or so of the 56.8 px the paced 9.14 m predicts, while the landing diameter is under-read by **roughly 6–9%** — 37.0 px measured against the 39.5–40.6 the flat-pitch constraint demands, depending which resting frame is taken as the reference.
 
 So the detector's box degrades as the ball recedes and blurs. **The horizontal survives it because `X` uses `D/d` directly, where a 6% error stays 6%. The vertical goes through the range slope, where the cross-term `2·u̇·Ż/fx` amplifies it.** That is the same cross-term this document has named since the beginning — now with a cause rather than only a magnitude.
 

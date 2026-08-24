@@ -27,7 +27,7 @@ Early development. **The app captures and reviews. The measurement works, but on
 
 **The reconstruction is validated against reality.** On every clip whose track reaches the ground, the observed displacement matches a distance paced out on the pitch to within **3–10%**. That confirms the whole measurement chain — focal length from field of view, ball diameter as scale, per-frame depth, 3D geometry — against an independent physical measurement rather than against itself.
 
-**The flight fit is not yet right.** The pipeline fits gravity from the data as an independent test — nothing tells it that gravity is 9.81 — and it averages **8.3** across nine clips. The cause is known: the detector's bounding box under-reads the ball's diameter as it recedes and blurs, by about 6% at the landing. The horizontal axis absorbs that harmlessly; the vertical amplifies it through the range slope.
+**The flight fit is not yet right.** The pipeline fits gravity from the data as an independent test — nothing tells it that gravity is 9.81 — and it averages **7.7** across the nine clips that produce metrics, or **8.3** across the seven the tool does not flag as suspect. The cause is known: the detector's bounding box under-reads the ball's diameter as it recedes and blurs, by roughly 6–9% at the landing. The horizontal axis absorbs that harmlessly; the vertical amplifies it through the range slope.
 
 Motion blur inflating the box, air resistance, camera tilt, and anchoring the range to the ball's resting size were each tested and each eliminated. Those negative results are recorded in `project_notes.md` and in the code.
 
